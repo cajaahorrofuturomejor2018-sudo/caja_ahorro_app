@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1071675914587",
+    "project_id": "cajaahorroapp",
+    "storage_bucket": "cajaahorroapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1071675914587:android:3f2f00dcb47028de09427e",
+        "android_client_info": {
+          "package_name": "com.ricardo.caja_ahorro_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtPoxf0AVoGT3fepxrBWsXtCNbiNnrl-s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,28 @@
+{
+	"flutter": {
+		"platforms": {
+			"android": {
+				"default": {
+					"projectId": "cajaahorroapp",
+					"appId": "1:1071675914587:android:3f2f00dcb47028de09427e",
+					"fileOutput": "android/app/google-services.json"
+				}
+			},
+			"dart": {
+				"lib/firebase_options.dart": {
+					"projectId": "cajaahorroapp",
+					"configurations": {
+						"android": "1:1071675914587:android:3f2f00dcb47028de09427e",
+						"ios": "1:1071675914587:ios:cf29e22801070fa709427e",
+						"macos": "1:1071675914587:ios:cf29e22801070fa709427e",
+						"web": "1:1071675914587:web:a3c8f629d2b603bd09427e",
+						"windows": "1:1071675914587:web:f80aee062e2bf2fd09427e"
+					}
+				}
+			}
+		}
+	},
+	"firestore": {
+		"rules": "firestore.rules"
+	}
+}
