@@ -77,7 +77,10 @@ class FirestoreService {
   Future<Usuario?> getUsuario(String uid) async {
     AppLogger.info('getUsuario start', {'uid': uid});
     final snapshot = await _db.collection('usuarios').doc(uid).get();
-    AppLogger.info('getUsuario result', {'uid': uid, 'exists': snapshot.exists});
+    AppLogger.info('getUsuario result', {
+      'uid': uid,
+      'exists': snapshot.exists,
+    });
     if (snapshot.exists) {
       return Usuario.fromFirestore(snapshot);
     }
@@ -97,7 +100,9 @@ class FirestoreService {
           .collection('usuarios')
           .where(FieldPath.documentId, whereIn: slice)
           .get();
-      AppLogger.info('getUsuariosByIds batch result', {'batchSize': snap.docs.length});
+      AppLogger.info('getUsuariosByIds batch result', {
+        'batchSize': snap.docs.length,
+      });
       for (final d in snap.docs) {
         result.add(Usuario.fromFirestore(d));
       }
@@ -115,7 +120,10 @@ class FirestoreService {
   Future<void> addDeposito(Deposito deposito) async {
     // Prevent duplicate vouchers if configured
     try {
-      AppLogger.info('addDeposito start', {'id_usuario': deposito.idUsuario, 'voucherHash': deposito.voucherHash});
+      AppLogger.info('addDeposito start', {
+        'id_usuario': deposito.idUsuario,
+        'voucherHash': deposito.voucherHash,
+      });
       final cfg = await getConfiguracion();
       AppLogger.info('addDeposito configuracion', {'cfg': cfg});
       final voucherCfg =
@@ -135,7 +143,9 @@ class FirestoreService {
       }
     } catch (e, st) {
       // Log config errors and proceed to add (to avoid blocking on misconfig)
-      AppLogger.warn('addDeposito: error leyendo config (se ignora)', {'error': e.toString()});
+      AppLogger.warn('addDeposito: error leyendo config (se ignora)', {
+        'error': e.toString(),
+      });
       AppLogger.error('addDeposito stack', e, st);
     }
     final result = await _db.collection('depositos').add(deposito.toMap());
@@ -193,13 +203,10 @@ class FirestoreService {
 
   /// Stream de todos los usuarios (para panel de administración).
   Stream<List<Usuario>> streamUsuarios() {
-    return _db
-        .collection('usuarios')
-        .snapshots()
-        .map((s) {
-          AppLogger.info('streamUsuarios snapshot', {'count': s.docs.length});
-          return s.docs.map((d) => Usuario.fromFirestore(d)).toList();
-        });
+    return _db.collection('usuarios').snapshots().map((s) {
+      AppLogger.info('streamUsuarios snapshot', {'count': s.docs.length});
+      return s.docs.map((d) => Usuario.fromFirestore(d)).toList();
+    });
   }
 
   /// Establece el rol del usuario.
@@ -219,7 +226,9 @@ class FirestoreService {
         .orderBy('fecha_registro', descending: true)
         .snapshots()
         .map((s) {
-          AppLogger.info('streamAllDepositos snapshot', {'count': s.docs.length});
+          AppLogger.info('streamAllDepositos snapshot', {
+            'count': s.docs.length,
+          });
           return s.docs.map((d) => Deposito.fromFirestore(d)).toList();
         });
   }
@@ -318,7 +327,10 @@ class FirestoreService {
     int ttlDays,
     String currentDepositId,
   ) async {
-    AppLogger.info('_isVoucherDuplicate start', {'voucherHash': voucherHash, 'ttlDays': ttlDays});
+    AppLogger.info('_isVoucherDuplicate start', {
+      'voucherHash': voucherHash,
+      'ttlDays': ttlDays,
+    });
     if (voucherHash.isEmpty) return false;
     final q = await _db
         .collection('depositos')
@@ -584,8 +596,12 @@ class FirestoreService {
     String? observaciones,
     List<Map<String, dynamic>>? detalleOverride,
   }) async {
-    AppLogger.info('approveDeposito start', {'depositoId': depositoId, 'adminUid': adminUid, 'approve': approve});
-  final depRef = _db.collection('depositos').doc(depositoId);
+    AppLogger.info('approveDeposito start', {
+      'depositoId': depositoId,
+      'adminUid': adminUid,
+      'approve': approve,
+    });
+    final depRef = _db.collection('depositos').doc(depositoId);
 
     // Load deposit snapshot to run pre-checks (duplicates / penalties)
     final depSnapPre = await depRef.get();
@@ -868,17 +884,14 @@ class FirestoreService {
   // --- Familias (grupos familiares) ---
 
   Stream<List<Map<String, dynamic>>> streamFamilias() {
-    return _db
-        .collection('familias')
-        .snapshots()
-        .map((s) {
-          AppLogger.info('streamFamilias snapshot', {'count': s.docs.length});
-          return s.docs.map((d) {
-            final m = Map<String, dynamic>.from(d.data() as Map);
-            m['id'] = d.id;
-            return m;
-          }).toList();
-        });
+    return _db.collection('familias').snapshots().map((s) {
+      AppLogger.info('streamFamilias snapshot', {'count': s.docs.length});
+      return s.docs.map((d) {
+        final m = Map<String, dynamic>.from(d.data() as Map);
+        m['id'] = d.id;
+        return m;
+      }).toList();
+    });
   }
 
   Future<void> createFamilia(Map<String, dynamic> payload) async {
