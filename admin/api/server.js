@@ -740,23 +740,28 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           }
         }
         const targetField = fieldForTipo(depTipo);
-        const current = (userData[targetField] || 0) + monto;
+        // Descontar la multa del monto acreditado al usuario
+        const montoMulta = parseFloat(multaMonto || 0);
+        const montoUsuarioNeto = Math.max(0, monto - montoMulta);
+        const current = (userData[targetField] || 0) + montoUsuarioNeto;
         tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
         tx.set(db.collection('movimientos').doc(), {
           id_usuario: idUsuario,
           tipo: depTipo || 'deposito',
           referencia_id: depositId,
-          monto: monto,
+          monto: montoUsuarioNeto,
           fecha: admin.firestore.FieldValue.serverTimestamp(),
           descripcion: depData?.descripcion || 'Depósito aprobado',
           registrado_por: adminUid,
         });
-        // Actualizar caja con el monto del depósito aprobado
-        const cajaRefDep = db.collection('caja').doc('estado');
-        const cajaSnapDep = await tx.get(cajaRefDep);
-        let saldoCajaDep = 0.0;
-        if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
-        tx.update(cajaRefDep, { saldo: saldoCajaDep + monto });
+        // Actualizar caja solo con el valor de la multa descontada
+        if (montoMulta > 0) {
+          const cajaRefDep = db.collection('caja').doc('estado');
+          const cajaSnapDep = await tx.get(cajaRefDep);
+          let saldoCajaDep = 0.0;
+          if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
+          tx.update(cajaRefDep, { saldo: saldoCajaDep + montoMulta });
+        }
 
         if (multaMonto > 0) {
           // Enviar multa a la caja (documento caja/estado)
@@ -815,13 +820,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
             registrado_por: adminUid,
           });
         }
-        // Actualizar caja con el monto total del depósito aprobado (repartido)
-        const cajaRefDep2 = db.collection('caja').doc('estado');
-        const cajaSnapDep2 = await tx.get(cajaRefDep2);
-        let saldoCajaDep2 = 0.0;
-        if (cajaSnapDep2.exists) saldoCajaDep2 = parseFloat(cajaSnapDep2.data().saldo || 0);
-        const montoTotalDep = parseFloat(depData?.monto || 0);
-        tx.update(cajaRefDep2, { saldo: saldoCajaDep2 + montoTotalDep });
+        // No sumar el total del depósito a caja; solo sumar las multas al final
 
         // Acumular multas (del detalle y/o multasPorUsuario) para enviar a la caja y registrar movimientos
         if (multasPorUsuario) {
