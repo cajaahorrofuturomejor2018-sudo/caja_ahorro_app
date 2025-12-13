@@ -120,6 +120,7 @@ export default function DepositosTab({ user }) {
                 <th>Fecha</th>
                 <th>Monto</th>
                 <th>Tipo</th>
+                <th>Voucher</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -144,6 +145,25 @@ export default function DepositosTab({ user }) {
                     }}>
                       {d.tipo || 'ahorro'}
                     </span>
+                  </td>
+                  <td>
+                    {d.archivo_url ? (
+                      <a
+                        href={d.archivo_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: '#0369a1',
+                          textDecoration: 'none',
+                          fontSize: '0.85rem',
+                          fontWeight: '600'
+                        }}
+                      >
+                        {d.voucher_is_pdf || d.archivo_url.toLowerCase().includes('.pdf') ? '📄 Ver PDF' : '🖼️ Ver Imagen'}
+                      </a>
+                    ) : (
+                      <span style={{ color: '#999', fontSize: '0.85rem' }}>Sin archivo</span>
+                    )}
                   </td>
                   <td>{getEstadoBadge(d.estado || (d.validado ? 'aprobado' : 'pendiente'))}</td>
                   <td>

@@ -93,6 +93,21 @@ class PenaltyCheckService {
 
       // Si no hay depósito de ahorro este mes, aplicar multa
       if (!hasMonthlyDeposit) {
+        // Evitar duplicar multa del mismo mes si ya existe pendiente
+        final existing = await _db
+            .collection('multas')
+            .where('id_usuario', isEqualTo: userId)
+            .where('tipo', isEqualTo: 'ahorro_faltante')
+            .where('mes', isEqualTo: now.month)
+            .where('anio', isEqualTo: now.year)
+            .where('estado', isEqualTo: 'pendiente')
+            .limit(1)
+            .get();
+
+        if (existing.docs.isNotEmpty) {
+          return 0.0;
+        }
+
         // Calcular multa: $1 por cada semana completa después del día 10
         final daysLate = now.day - 10;
         final weeks = ((daysLate - 1) ~/ 7) + 1;

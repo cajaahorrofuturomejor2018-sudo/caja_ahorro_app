@@ -364,6 +364,12 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
       const current = (data[field] || 0) + monto;
       tx.update(userRef, { [field]: current });
       tx.set(db.collection('movimientos').doc(), { id_usuario: idUsuario, tipo: tipo || 'deposito', referencia_id: docRef.id, monto: monto, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: descripcion || 'Aporte admin', registrado_por: req.user.uid });
+      // Actualizar caja con el aporte registrado por admin
+      const cajaRefAporte = db.collection('caja').doc('estado');
+      const cajaSnapAporte = await tx.get(cajaRefAporte);
+      let cajaSaldoAporte = 0.0;
+      if (cajaSnapAporte.exists) cajaSaldoAporte = parseFloat(cajaSnapAporte.data().saldo || 0);
+      tx.update(cajaRefAporte, { saldo: cajaSaldoAporte + parseFloat(monto) });
     });
     res.json({ ok: true, id: docRef.id });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
@@ -466,7 +472,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       }
     }
 
-    // Transactional approve logic
+      // Transactional approve logic
     await db.runTransaction(async (tx) => {
       const depRef = db.collection('depositos').doc(depositId);
       const depSnap = await tx.get(depRef);
@@ -483,7 +489,32 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         return;
       }
 
-      const config = await getConfiguracion();
+      // 🔴 SI EL DEPÓSITO ES DE TIPO 'multa' Y SE APRUEBA, MARCAR LAS MULTAS DEL USUARIO COMO 'pagada'
+      const depTipo = depData?.tipo || 'ahorro';
+      const depUsuarioId = depData?.id_usuario;
+      if (approve && depTipo === 'multa' && depUsuarioId) {
+        // Obtener todas las multas pendientes del usuario (fuera de la transacción)
+        const multasSnapBefore = await db.collection('multas')
+          .where('id_usuario', '==', depUsuarioId)
+          .where('estado', '==', 'pendiente')
+          .get();
+        
+        // Dentro de la transacción, marcar cada una como 'pagada'
+        for (const multaDoc of multasSnapBefore.docs) {
+          tx.update(db.collection('multas').doc(multaDoc.id), {
+            estado: 'pagada',
+            fecha_pago: admin.firestore.FieldValue.serverTimestamp(),
+            deposito_pago_id: depositId,
+          });
+        }
+        
+        // Actualizar total_multas del usuario a 0
+        const userRef = db.collection('usuarios').doc(depUsuarioId);
+        const userSnap = await tx.get(userRef);
+        if (userSnap.exists) {
+          tx.update(userRef, { total_multas: 0.0 });
+        }
+      }      const config = await getConfiguracion();
 
       const voucherCfg = (config?.voucher_reuse_block) || {};
       const voucherBlockEnabled = voucherCfg?.enabled || false;
@@ -573,6 +604,13 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           descripcion: depData?.descripcion || 'Depósito aprobado',
           registrado_por: adminUid,
         });
+        // Actualizar caja con el monto del depósito aprobado
+        const cajaRefDep = db.collection('caja').doc('estado');
+        const cajaSnapDep = await tx.get(cajaRefDep);
+        let saldoCajaDep = 0.0;
+        if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
+        tx.update(cajaRefDep, { saldo: saldoCajaDep + monto });
+
         if (multaMonto > 0) {
           // Enviar multa a la caja (documento caja/estado)
           const cajaRef = db.collection('caja').doc('estado');
@@ -624,6 +662,14 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
             registrado_por: adminUid,
           });
         }
+        // Actualizar caja con el monto total del depósito aprobado (repartido)
+        const cajaRefDep2 = db.collection('caja').doc('estado');
+        const cajaSnapDep2 = await tx.get(cajaRefDep2);
+        let saldoCajaDep2 = 0.0;
+        if (cajaSnapDep2.exists) saldoCajaDep2 = parseFloat(cajaSnapDep2.data().saldo || 0);
+        const montoTotalDep = parseFloat(depData?.monto || 0);
+        tx.update(cajaRefDep2, { saldo: saldoCajaDep2 + montoTotalDep });
+
         // Acumular multas para enviar a la caja y registrar movimientos
         let multasSum = 0.0;
         if (multasPorUsuario) {
@@ -769,6 +815,11 @@ app.post('/api/prestamos/:id/approve', verifyToken, async (req, res) => {
         tx.update(preRef, { estado: 'rechazado', estado_usuario: 'rechazado', id_admin_aprobador: adminUid, observaciones: observaciones || '', fecha_revision: admin.firestore.FieldValue.serverTimestamp() });
         return;
       }
+      // Validación: requerir contrato PDF para aprobar
+      const existingContrato = (documentoContratoUrl || data.documento_contrato_url || '').toString();
+      if (!existingContrato) {
+        throw new Error('Se requiere subir el contrato PDF antes de aprobar el préstamo');
+      }
       const montoSolicitud = parseFloat(data.monto_solicitado || 0);
       const finalMonto = montoAprobado != null ? parseFloat(montoAprobado) : montoSolicitud;
       const intPlazo = plazoMeses != null ? parseInt(plazoMeses, 10) : (parseInt(data.plazo_meses || 12, 10) || 12);
@@ -784,6 +835,12 @@ app.post('/api/prestamos/:id/approve', verifyToken, async (req, res) => {
       const fechaInicio = new Date();
       const fechaFin = new Date(fechaInicio.getFullYear(), fechaInicio.getMonth() + intPlazo, fechaInicio.getDate());
       const proximaCuota = new Date(fechaInicio.getFullYear(), fechaInicio.getMonth() + 1, fechaInicio.getDate());
+      // Leer caja antes de escribir para ajustar el saldo por desembolso
+      const cajaRef = db.collection('caja').doc('estado');
+      const cajaSnapCaja = await tx.get(cajaRef);
+      let cajaSaldoActual = 0.0;
+      if (cajaSnapCaja.exists) cajaSaldoActual = parseFloat(cajaSnapCaja.data().saldo || 0);
+
       tx.update(preRef, {
         estado: 'activo',
         estado_usuario: 'activo',
@@ -817,6 +874,8 @@ app.post('/api/prestamos/:id/approve', verifyToken, async (req, res) => {
         const currentPrestamos = parseFloat(usuarioData.total_prestamos || 0);
         tx.update(usuarioRef, { total_prestamos: currentPrestamos + finalMonto });
       }
+      // Actualizar caja: desembolso reduce saldo
+      tx.update(cajaRef, { saldo: cajaSaldoActual - finalMonto });
     });
     // Optionally, notify the user
     try {
@@ -865,6 +924,13 @@ app.post('/api/prestamos/:id/precancelar', verifyToken, async (req, res) => {
         descripcion: 'Préstamo precancelado por pago en un solo pago',
         registrado_por: adminUid,
       });
+      // Actualizar caja: precancelación incrementa saldo por el pago
+      const cajaRefPre = db.collection('caja').doc('estado');
+      const cajaSnapPre = await tx.get(cajaRefPre);
+      let cajaSaldoPre = 0.0;
+      if (cajaSnapPre.exists) cajaSaldoPre = parseFloat(cajaSnapPre.data().saldo || 0);
+      const montoPre = parseFloat(data.saldo_pendiente || 0);
+      tx.update(cajaRefPre, { saldo: cajaSaldoPre + montoPre });
     });
     
     // Notificar
@@ -924,6 +990,13 @@ app.post('/api/prestamos/:id/pagos', verifyToken, async (req, res) => {
       tx.update(preRef, updates);
       // crear movimiento
       tx.set(db.collection('movimientos').doc(), { id_usuario: data.id_usuario || '', tipo: 'pago_prestamo', referencia_id: id, monto: pago.monto || pago['monto'] || 0, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: pago.descripcion || 'Pago préstamo', registrado_por: req.user.uid });
+      // Actualizar caja: pago de préstamo incrementa saldo
+      const cajaRefPago = db.collection('caja').doc('estado');
+      const cajaSnapPago = await tx.get(cajaRefPago);
+      let cajaSaldoPago = 0.0;
+      if (cajaSnapPago.exists) cajaSaldoPago = parseFloat(cajaSnapPago.data().saldo || 0);
+      const montoPago = parseFloat(pago.monto || pago['monto'] || 0);
+      tx.update(cajaRefPago, { saldo: cajaSaldoPago + montoPago });
     });
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }

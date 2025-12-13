@@ -170,6 +170,8 @@ class _MultasDepositoFormState extends State<MultasDepositoForm> {
       await service.addDeposito(dep);
 
       if (!mounted) return;
+
+      // Mostrar mensaje de éxito
       messenger.showSnackBar(
         const SnackBar(
           content: Text(
@@ -178,7 +180,14 @@ class _MultasDepositoFormState extends State<MultasDepositoForm> {
           backgroundColor: Colors.green,
         ),
       );
-      navigator.pop();
+
+      // Esperar un poco para que el mensaje sea visible
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (!mounted) return;
+
+      // Regresar al dashboard con resultado 'paid' para que se refresque
+      navigator.pop<String>('paid');
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Error al guardar: ${e.toString()}')),

@@ -18,6 +18,9 @@ export default function PrestamosTab({ user }) {
     uploadingPdf: false,
     pdfUrl: ''
   });
+  const [showReviewModal, setShowReviewModal] = useState(null);
+  const [pagoForm, setPagoForm] = useState({ monto: '', descripcion: '' });
+  const [addingPago, setAddingPago] = useState(false);
 
   useEffect(() => {
     if (user?.token) {
@@ -154,6 +157,31 @@ export default function PrestamosTab({ user }) {
     }
   }
 
+  async function addPago() {
+    if (!showReviewModal || !pagoForm.monto) {
+      setError('Ingrese el monto del pago');
+      return;
+    }
+
+    setAddingPago(true);
+    const result = await apiPost(`/prestamos/${showReviewModal.id}/pagos`, {
+      monto: parseFloat(pagoForm.monto),
+      descripcion: pagoForm.descripcion || 'Pago registrado por admin',
+      fecha: new Date().toISOString()
+    });
+    setAddingPago(false);
+
+    if (result.success) {
+      setSuccess('Pago registrado correctamente');
+      setTimeout(() => setSuccess(null), 3000);
+      setPagoForm({ monto: '', descripcion: '' });
+      setShowReviewModal(null);
+      load();
+    } else {
+      setError(result.error);
+    }
+  }
+
   return (
     <div>
       <h2>💳 Préstamos</h2>
@@ -237,6 +265,21 @@ export default function PrestamosTab({ user }) {
                             <strong>Cuota:</strong> {formatCurrency(p.cuota_mensual)} | 
                             <strong> Próx. Pago:</strong> {formatDate(p.proxima_fecha_pago)}
                           </div>
+                          <button
+                            onClick={() => setShowReviewModal(p)}
+                            style={{
+                              background: '#3b82f6',
+                              color: '#fff',
+                              padding: '6px 12px',
+                              fontSize: '0.85rem',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: 'pointer'
+                            }}
+                            title="Ver detalles, contrato y registrar pagos"
+                          >
+                            📋 Revisar
+                          </button>
                           <button
                             onClick={() => precancelar(p.id)}
                             disabled={approving === p.id}
@@ -448,6 +491,170 @@ export default function PrestamosTab({ user }) {
                   border: 'none',
                   borderRadius: '6px',
                   cursor: approving ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem'
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Revisión de Préstamo Activo */}
+      {showReviewModal && (
+        <div className="modal-overlay" onClick={() => setShowReviewModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3>📋 Detalles del Préstamo</h3>
+
+            <div style={{ background: '#f5f5f5', padding: '16px', borderRadius: '8px', marginBottom: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <strong>Usuario:</strong><br/>
+                  <span style={{ fontSize: '0.85rem', color: '#666' }}>{showReviewModal.id_usuario}</span>
+                </div>
+                <div>
+                  <strong>Estado:</strong><br/>
+                  {getEstadoBadge(showReviewModal.estado)}
+                </div>
+                <div>
+                  <strong>Monto Aprobado:</strong><br/>
+                  <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>
+                    {formatCurrency(showReviewModal.monto_aprobado)}
+                  </span>
+                </div>
+                <div>
+                  <strong>Saldo Pendiente:</strong><br/>
+                  <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#ef4444' }}>
+                    {formatCurrency(showReviewModal.saldo_pendiente)}
+                  </span>
+                </div>
+                <div>
+                  <strong>Cuota Mensual:</strong><br/>
+                  {formatCurrency(showReviewModal.cuota_mensual)}
+                </div>
+                <div>
+                  <strong>Interés:</strong><br/>
+                  {showReviewModal.interes}%
+                </div>
+                <div>
+                  <strong>Plazo:</strong><br/>
+                  {showReviewModal.plazo_meses} meses
+                </div>
+                <div>
+                  <strong>Meses Restantes:</strong><br/>
+                  {showReviewModal.meses_restantes} meses
+                </div>
+                <div>
+                  <strong>Próximo Pago:</strong><br/>
+                  {formatDate(showReviewModal.proxima_fecha_pago)}
+                </div>
+                <div>
+                  <strong>Fecha Aprobación:</strong><br/>
+                  {formatDate(showReviewModal.fecha_aprobacion)}
+                </div>
+              </div>
+            </div>
+
+            {/* Contrato */}
+            {showReviewModal.documento_contrato_url && (
+              <div style={{ marginBottom: '16px', padding: '12px', background: '#e0f2fe', borderRadius: '8px' }}>
+                <strong>📄 Contrato:</strong>
+                <a
+                  href={showReviewModal.documento_contrato_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ marginLeft: '8px', color: '#0369a1', fontWeight: '600' }}
+                >
+                  Ver PDF
+                </a>
+              </div>
+            )}
+
+            {/* Historial de Pagos */}
+            {showReviewModal.historial_pagos && showReviewModal.historial_pagos.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <h4>Historial de Pagos</h4>
+                <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #e0e0e0', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ background: '#f5f5f5' }}>
+                        <th style={{ padding: '8px', textAlign: 'left' }}>Fecha</th>
+                        <th style={{ padding: '8px', textAlign: 'right' }}>Monto</th>
+                        <th style={{ padding: '8px', textAlign: 'left' }}>Descripción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {showReviewModal.historial_pagos.map((pago, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                          <td style={{ padding: '8px' }}>{formatDate(pago.fecha)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>
+                            {formatCurrency(pago.monto)}
+                          </td>
+                          <td style={{ padding: '8px', fontSize: '0.8rem', color: '#666' }}>
+                            {pago.descripcion || '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Registrar Nuevo Pago */}
+            <div style={{ marginTop: '20px', padding: '16px', background: '#fff3cd', borderRadius: '8px', border: '2px solid #ffc107' }}>
+              <h4 style={{ marginTop: 0, color: '#856404' }}>💰 Registrar Pago</h4>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontWeight: '600' }}>Monto (S/)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={pagoForm.monto}
+                  onChange={(e) => setPagoForm(prev => ({ ...prev, monto: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', fontSize: '16px', borderRadius: '6px', border: '2px solid #e0e0e0' }}
+                  placeholder="Ej: 150.00"
+                />
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontWeight: '600' }}>Descripción (opcional)</label>
+                <input
+                  type="text"
+                  value={pagoForm.descripcion}
+                  onChange={(e) => setPagoForm(prev => ({ ...prev, descripcion: e.target.value }))}
+                  style={{ width: '100%', padding: '8px', fontSize: '14px', borderRadius: '6px', border: '2px solid #e0e0e0' }}
+                  placeholder="Ej: Cuota mes de diciembre"
+                />
+              </div>
+              <button
+                onClick={addPago}
+                disabled={addingPago || !pagoForm.monto}
+                style={{
+                  background: addingPago || !pagoForm.monto ? '#ccc' : '#28a745',
+                  color: '#fff',
+                  padding: '10px 20px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: addingPago || !pagoForm.monto ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  width: '100%'
+                }}
+              >
+                {addingPago ? '⏳ Registrando...' : '✅ Registrar Pago'}
+              </button>
+            </div>
+
+            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowReviewModal(null)}
+                style={{
+                  background: '#6c757d',
+                  color: '#fff',
+                  padding: '10px 24px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
                   fontSize: '1rem'
                 }}
               >
