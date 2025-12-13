@@ -247,51 +247,105 @@ app.get('/api/reportes/usuarios', verifyToken, async (req, res) => {
     const fonts = { Roboto: { normal: Buffer.from([]), bold: Buffer.from([]), italics: Buffer.from([]), bolditalics: Buffer.from([]) } };
     const printer = new PdfPrinter(fonts);
     const now = new Date();
+    
+    // Calcular totales
+    let totalSaldo = 0, totalAhorros = 0, totalPlazos = 0, totalCertificados = 0, totalMultas = 0;
+    rows.forEach(r => {
+      totalSaldo += parseFloat(r[2].replace(/[^0-9.-]/g, '')) || 0;
+      totalAhorros += parseFloat(r[3].replace(/[^0-9.-]/g, '')) || 0;
+      totalPlazos += parseFloat(r[4].replace(/[^0-9.-]/g, '')) || 0;
+      totalCertificados += parseFloat(r[5].replace(/[^0-9.-]/g, '')) || 0;
+      totalMultas += parseFloat(r[6].replace(/[^0-9.-]/g, '')) || 0;
+    });
+
     const docDefinition = {
       pageSize: 'A4',
       pageMargins: [28, 40, 28, 40],
       content: [
-        { text: 'CAJA DE AHORRO', style: 'header', alignment: 'center' },
-        { text: 'Reporte de Usuarios y Saldos', style: 'subheader', alignment: 'center' },
-        { text: `Generado: ${now.toLocaleString('es-EC')}`, style: 'date', alignment: 'center' },
+        { text: '💰 CAJA DE AHORRO', style: 'header', alignment: 'center' },
+        { text: 'Reporte Detallado de Usuarios y Saldos', style: 'subheader', alignment: 'center' },
+        { text: `Generado: ${now.toLocaleString('es-EC')} | Total Usuarios: ${rows.length}`, style: 'date', alignment: 'center' },
         { text: '\n' },
         {
           table: {
             headerRows: 1,
-            widths: ['15%', '20%', '10%', '10%', '12%', '12%', '10%', '11%'],
+            widths: ['18%', '18%', '12%', '12%', '12%', '12%', '10%', '6%'],
             body: [
               [
-                { text: 'Usuario', style: 'tableHeader' },
-                { text: 'Correo', style: 'tableHeader' },
-                { text: 'Saldo Total', style: 'tableHeader' },
-                { text: 'Ahorros', style: 'tableHeader' },
-                { text: 'Plazo Fijo', style: 'tableHeader' },
-                { text: 'Certificados', style: 'tableHeader' },
-                { text: 'Multas', style: 'tableHeader' },
-                { text: 'Últ. Depósito', style: 'tableHeader' }
+                { text: '👤 Usuario', style: 'tableHeader' },
+                { text: '📧 Correo', style: 'tableHeader' },
+                { text: '💵 Saldo Total', style: 'tableHeader' },
+                { text: '🏦 Ahorros', style: 'tableHeader' },
+                { text: '📅 Plazo Fijo', style: 'tableHeader' },
+                { text: '🎯 Certificados', style: 'tableHeader' },
+                { text: '⚠️ Multas', style: 'tableHeader' },
+                { text: '📆 Últ. Depo', style: 'tableHeader' }
               ],
-              ...rows.map(r => r.map(cell => ({ text: cell, style: 'tableBody' })))
+              ...rows.map((r, idx) => r.map((cell, cidx) => ({
+                text: cell,
+                style: 'tableBody',
+                fillColor: idx % 2 === 0 ? '#f8fafc' : '#ffffff',
+                border: [1, 1, 1, 1],
+                borderColor: '#e2e8f0',
+                alignment: cidx > 1 ? 'right' : 'left'
+              }))),
+              [
+                { text: 'TOTAL', style: 'tableTotalLabel', fillColor: '#1e293b' },
+                { text: '', style: 'tableBody', fillColor: '#1e293b' },
+                { text: formatCurrencyLocal(totalSaldo), style: 'tableTotalValue', fillColor: '#1e293b', alignment: 'right' },
+                { text: formatCurrencyLocal(totalAhorros), style: 'tableTotalValue', fillColor: '#1e293b', alignment: 'right' },
+                { text: formatCurrencyLocal(totalPlazos), style: 'tableTotalValue', fillColor: '#1e293b', alignment: 'right' },
+                { text: formatCurrencyLocal(totalCertificados), style: 'tableTotalValue', fillColor: '#1e293b', alignment: 'right' },
+                { text: formatCurrencyLocal(totalMultas), style: 'tableTotalValue', fillColor: '#1e293b', alignment: 'right' },
+                { text: '', style: 'tableBody', fillColor: '#1e293b' }
+              ]
             ]
           },
           layout: {
-            fillColor: (rowIndex) => rowIndex === 0 ? '#0ea5e9' : (rowIndex % 2 === 0 ? '#f0f9ff' : '#fff'),
-            hLineWidth: (i, node) => i === 0 || i === node.table.body.length ? 2 : 0.5,
-            vLineWidth: () => 0.5,
+            hLineWidth: (i, node) => i === 0 || i === node.table.body.length ? 2 : 1,
+            vLineWidth: () => 1,
             hLineColor: () => '#cbd5e1',
-            vLineColor: () => '#cbd5e1',
-            paddingLeft: () => 6,
-            paddingRight: () => 6,
-            paddingTop: () => 8,
-            paddingBottom: () => 8
+            vLineColor: () => '#e2e8f0',
+            paddingLeft: () => 8,
+            paddingRight: () => 8,
+            paddingTop: () => 6,
+            paddingBottom: () => 6
           }
+        },
+        { text: '\n' },
+        {
+          columns: [
+            {
+              stack: [
+                { text: '📊 Resumen por Tipo', style: 'summaryTitle' },
+                { text: `Ahorros Totales: ${formatCurrencyLocal(totalAhorros)}`, style: 'summaryRow' },
+                { text: `Plazos Fijos: ${formatCurrencyLocal(totalPlazos)}`, style: 'summaryRow' },
+                { text: `Certificados: ${formatCurrencyLocal(totalCertificados)}`, style: 'summaryRow' },
+                { text: `Multas Acumuladas: ${formatCurrencyLocal(totalMultas)}`, style: 'summaryRow' }
+              ]
+            },
+            {
+              stack: [
+                { text: '📈 Estadísticas', style: 'summaryTitle' },
+                { text: `Total Usuarios: ${rows.length}`, style: 'summaryRow' },
+                { text: `Saldo Neto Total: ${formatCurrencyLocal(totalSaldo)}`, style: 'summaryRow', bold: true },
+                { text: `Promedio por Usuario: ${formatCurrencyLocal(totalSaldo / rows.length)}`, style: 'summaryRow' }
+              ]
+            }
+          ],
+          columnGap: 20
         }
       ],
       styles: {
-        header: { fontSize: 18, bold: true, color: '#0ea5e9', marginBottom: 4 },
-        subheader: { fontSize: 12, color: '#64748b', marginBottom: 2 },
-        date: { fontSize: 9, color: '#94a3b8', marginBottom: 12 },
-        tableHeader: { fontSize: 10, bold: true, color: '#fff', alignment: 'center' },
-        tableBody: { fontSize: 9, alignment: 'left' }
+        header: { fontSize: 20, bold: true, color: '#0ea5e9', marginBottom: 4 },
+        subheader: { fontSize: 13, color: '#475569', marginBottom: 2, bold: true },
+        date: { fontSize: 9, color: '#64748b', marginBottom: 14 },
+        tableHeader: { fontSize: 10, bold: true, color: '#ffffff', alignment: 'center', backgroundColor: '#0ea5e9' },
+        tableBody: { fontSize: 8.5, alignment: 'left' },
+        tableTotalLabel: { fontSize: 9, bold: true, color: '#ffffff', alignment: 'left' },
+        tableTotalValue: { fontSize: 9, bold: true, color: '#10b981', alignment: 'right' },
+        summaryTitle: { fontSize: 11, bold: true, color: '#0ea5e9', marginBottom: 6 },
+        summaryRow: { fontSize: 9, color: '#475569', marginBottom: 4 }
       },
       footer: (currentPage, pageCount) => ({
         columns: [

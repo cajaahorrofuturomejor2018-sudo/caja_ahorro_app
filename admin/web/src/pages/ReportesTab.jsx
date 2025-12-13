@@ -5,6 +5,7 @@ export default function ReportesTab({ user }) {
   const [totals, setTotals] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   async function loadTotals() {
     setLoading(true);
@@ -58,18 +59,57 @@ export default function ReportesTab({ user }) {
     URL.revokeObjectURL(url);
   }
 
+  async function downloadPDF() {
+    try {
+      setDownloadingPdf(true);
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+      const resp = await fetch(`${base}/api/reportes/usuarios`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      if (!resp.ok) throw new Error('Error generando PDF');
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reporte_usuarios_${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message || 'Error al descargar PDF');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
   return (
     <div>
       <h2>Reportes de Agregados</h2>
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         <button onClick={loadTotals} disabled={loading}>
           {loading ? 'Actualizando...' : 'Actualizar Datos'}
         </button>
         <button onClick={downloadJSON} disabled={!totals || loading}>Descargar JSON</button>
         <button onClick={downloadCSV} disabled={!totals || loading}>Descargar CSV</button>
+        <button 
+          onClick={downloadPDF} 
+          disabled={!totals || loading || downloadingPdf}
+          style={{ 
+            background: downloadingPdf ? '#ccc' : '#10b981', 
+            color: '#fff', 
+            padding: '8px 16px', 
+            borderRadius: '6px', 
+            border: 'none', 
+            cursor: downloadingPdf ? 'not-allowed' : 'pointer',
+            fontWeight: 'bold'
+          }}
+        >
+          {downloadingPdf ? '⏳ Generando PDF...' : '📄 Exportar Reporte PDF'}
+        </button>
       </div>
 
       {loading ? (
