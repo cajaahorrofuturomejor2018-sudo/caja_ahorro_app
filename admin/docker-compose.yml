@@ -1,0 +1,39 @@
+version: '3.8'
+services:
+  api:
+    build:
+      context: ./api
+    container_name: caja_admin_api
+    restart: unless-stopped
+    environment:
+      - SERVICE_ACCOUNT_PATH=/run/secrets/serviceAccountKey.json
+      # Ejecuta con Firestore real sin tokens/claims
+      - MOCK_API=false
+      - DISABLE_AUTH=true
+      # Lista de emails con rol admin (fallback si vuelves a habilitar auth)
+      - ADMIN_EMAILS=cajaahorrofuturomejor2018@gmail.com
+    # If you provide `admin/api/serviceAccountKey.json` it will be mounted into the container
+    volumes:
+      - ./api:/app:rw
+      - ./api/serviceAccountKey.json:/run/secrets/serviceAccountKey.json:ro
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ./web
+      args:
+        - VITE_API_URL=/api
+    container_name: caja_admin_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+    volumes:
+      - ./web:/app:ro
+
+networks:
+  default:
+    name: caja_admin_network
+

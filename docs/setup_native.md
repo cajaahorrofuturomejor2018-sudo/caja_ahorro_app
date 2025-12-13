@@ -40,6 +40,13 @@ Si quieres que Gradle use JDK 21 localmente (ej.: para compilar con característ
 3. O establece la variable de entorno `JAVA_HOME` al JDK 21 y reinicia la terminal.
 4. Comprueba con `cd android && gradlew.bat -v` que la JVM usada es la 21.
 
+### Verificación rápida
+Puedes usar el script incluido `scripts/check-jdk21.ps1` para comprobar localmente si Java 21 está instalado y para ver si Gradle lo está usando. Desde la raíz del repositorio ejecuta:
+
+```powershell
+.\scripts\check-jdk21.ps1
+```
+
 ## Notas adicionales
 - Si añades `printing` o `share_plus`, revisa permisos en Android si usas almacenamiento externo.
 - Para producción, configura ProGuard/R8 (minify) y reglas para ML Kit si usas ofuscación.

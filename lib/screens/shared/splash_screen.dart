@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../auth/login_screen.dart';
 import '../cliente/cliente_dashboard.dart';
-import '../admin/admin_dashboard.dart';
+// Admin removed from mobile; admin portal available via web.
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -34,15 +34,11 @@ class _SplashScreenState extends State<SplashScreen> {
           .doc(user.uid)
           .get();
       if (doc.exists) {
-        final rol = doc['rol'];
+        // Always navigate to ClienteDashboard on mobile. Admins should use the Admin Web.
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(
-            builder: (_) => rol == 'admin'
-                ? const AdminDashboard()
-                : const ClienteDashboard(),
-          ),
+          MaterialPageRoute(builder: (_) => const ClienteDashboard()),
         );
       } else {
         if (!mounted) return;

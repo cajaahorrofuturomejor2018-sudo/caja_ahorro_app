@@ -7,20 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:caja_ahorro_app/core/services/firestore_service.dart';
 import 'package:caja_ahorro_app/models/deposito.dart';
-import 'package:caja_ahorro_app/models/usuario.dart';
 import 'package:caja_ahorro_app/widgets/voucher_picker.dart';
-
-class _MemberEntry {
-  String? selectedUid;
-  final TextEditingController montoCtrl = TextEditingController();
-  String tipo;
-
-  _MemberEntry() : tipo = 'ahorro';
-
-  void dispose() {
-    montoCtrl.dispose();
-  }
-}
 
 class DepositoForm extends StatefulWidget {
   const DepositoForm({super.key});
@@ -33,14 +20,38 @@ class _DepositoFormState extends State<DepositoForm> {
   final _formKey = GlobalKey<FormState>();
   final _montoCtrl = TextEditingController();
   final _descripcionCtrl = TextEditingController();
-  final _manualAccountDigitsCtrl = TextEditingController();
   final _montoTotalCtrl = TextEditingController();
 
-  // Miembros: mantengo una pequeña clase manejadora para controllers por fila
-  final List<_MemberEntry> _members = [];
   final FirestoreService _service = FirestoreService();
-  List<Usuario> _currentFamilyUsuarios = [];
-  String? _selectedFamiliaId;
+  String _selectedTipo = 'ahorro';
+  bool _hasMultas = false;
+  bool _esDepuesDiaDiez = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserFlags();
+    _checkFecha();
+  }
+
+  void _checkFecha() {
+    final ahora = DateTime.now();
+    setState(() {
+      _esDepuesDiaDiez = ahora.day > 10;
+    });
+  }
+
+  Future<void> _loadUserFlags() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
+      final u = await _service.getUsuario(uid);
+      if (!mounted) return;
+      setState(() {
+        _hasMultas = (u?.totalMultas ?? 0) > 0.0;
+      });
+    } catch (_) {}
+  }
 
   File? _pickedFile;
   Map<String, dynamic>? _ocrResult;
@@ -52,79 +63,32 @@ class _DepositoFormState extends State<DepositoForm> {
   void dispose() {
     _montoCtrl.dispose();
     _descripcionCtrl.dispose();
-    _manualAccountDigitsCtrl.dispose();
     _montoTotalCtrl.dispose();
-    for (final m in _members) {
-      m.dispose();
-    }
     super.dispose();
-  }
-
-  String? _manualDigitsValidator(String? v) {
-    final detected = _ocrResult != null
-        ? (_ocrResult!['detected_account_digits'] as String?)
-        : null;
-    final accountMatches = _ocrResult != null
-        ? (_ocrResult!['account_matches'] as bool?)
-        : null;
-    // If OCR detected and matches the user's stored account, manual input is optional
-    if (detected != null && detected.isNotEmpty && accountMatches == true) {
-      return null;
-    }
-
-    if (v == null || v.trim().isEmpty) {
-      return 'Se requiere indicar los últimos dígitos de la cuenta destino';
-    }
-    final candidate = v.trim();
-    // Enforce exactly 3 or 4 digits
-    final match = RegExp(r'^\d{3,4}$').firstMatch(candidate);
-    if (match == null) {
-      return 'Ingrese 3 o 4 dígitos válidos';
-    }
-    return null;
   }
 
   Future<void> _onSave() async {
     if (!_formKey.currentState!.validate()) return;
-    // Require at least one miembro (familia) — for this app deposits should be family-type
-    if (_members.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Agregue al menos un miembro de la familia al depósito.',
-          ),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    // Validación adicional: si hay miembros, la suma de sus montos debe
-    // coincidir exactamente con el monto total (en centavos) para evitar
-    // inserciones incorrectas.
-    final montoTotal =
-        double.tryParse(_montoTotalCtrl.text.replaceAll(',', '.')) ??
-        double.tryParse(_montoCtrl.text.replaceAll(',', '.')) ??
-        0.0;
-    if (_members.isNotEmpty) {
-      final totalCents = (montoTotal * 100).round();
-      var sumCents = 0;
-      for (final m in _members) {
-        final mm =
-            double.tryParse(m.montoCtrl.text.replaceAll(',', '.')) ?? 0.0;
-        sumCents += (mm * 100).round();
-      }
-      if (sumCents != totalCents) {
+
+    // VALIDACIÓN CRÍTICA: Bloquear ahorro y pago_prestamo si hay multas después del día 10
+    if (_hasMultas && _esDepuesDiaDiez) {
+      if (_selectedTipo == 'ahorro' || _selectedTipo == 'pago_prestamo') {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'La suma de montos por miembro debe coincidir con el monto total.',
+              '⚠️ No puede realizar depósitos de ahorro mensual ni pago de préstamos mientras tenga multas pendientes. Por favor, pague sus multas primero.',
             ),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
           ),
         );
+        setState(() => _processing = false);
         return;
       }
     }
+
+    // Deposito personal: no hay reparto por familia. El depósito se asigna
+    // directamente al usuario que lo registra (current user).
     setState(() => _processing = true);
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -146,26 +110,17 @@ class _DepositoFormState extends State<DepositoForm> {
           double.tryParse(_montoCtrl.text.replaceAll(',', '.')) ??
           0.0;
 
-      // Prefer OCR verified digits, otherwise the manual input
+      // Prefer OCR detected digits (optional, no input manual)
       String? detectedDigits;
-      if (_ocrResult != null && (_ocrResult!['account_matches'] == true)) {
-        detectedDigits = _ocrResult!['detected_account_digits'] as String?;
-      } else if (_manualAccountDigitsCtrl.text.trim().isNotEmpty) {
-        detectedDigits = _manualAccountDigitsCtrl.text.trim();
+      if (_ocrResult != null) {
+        detectedDigits =
+            (_ocrResult!['detected_account_digits'] as String?) ??
+            (_ocrResult!['detected_account_last4'] as String?) ??
+            (_ocrResult!['detected_account_last3'] as String?);
       }
 
-      // Construir detalle_por_usuario si hay miembros
+      // Deposito personal: no detalle_por_usuario
       List<Map<String, dynamic>>? detalle;
-      if (_members.isNotEmpty) {
-        detalle = _members.map((m) {
-          return {
-            'id_usuario': m.selectedUid ?? '',
-            'tipo': m.tipo,
-            'monto':
-                double.tryParse(m.montoCtrl.text.replaceAll(',', '.')) ?? 0.0,
-          };
-        }).toList();
-      }
 
       // Generar voucherHash dando prioridad a un número de Comprobante/Documento
       // extraído por el OCR o detectado en el texto. Si existe, usar su hash
@@ -262,17 +217,8 @@ class _DepositoFormState extends State<DepositoForm> {
         voucherHash = null;
       }
 
-      // Determinar el tipo del depósito:
-      // - si no hay miembros -> 'ahorro' por defecto
-      // - si todos los miembros tienen el mismo tipo -> ese tipo
-      // - si hay tipos mezclados -> 'mixto'
-      final String tipoDep;
-      if (_members.isEmpty) {
-        tipoDep = 'ahorro';
-      } else {
-        final tipos = _members.map((m) => m.tipo).toSet();
-        tipoDep = tipos.length == 1 ? tipos.first : 'mixto';
-      }
+      // Determinar el tipo del depósito según selector del formulario
+      final String tipoDep = _selectedTipo;
 
       final dep = Deposito(
         // idUsuario aquí se usa como autor/solicitante del depósito (quien sube el comprobante)
@@ -346,13 +292,6 @@ class _DepositoFormState extends State<DepositoForm> {
                     setState(() {
                       _pickedFile = file;
                       _ocrResult = result;
-                      final last4 = result['detected_account_last4'] as String?;
-                      final last3 = result['detected_account_last3'] as String?;
-                      if (last4 != null && last4.isNotEmpty) {
-                        _manualAccountDigitsCtrl.text = last4;
-                      } else if (last3 != null && last3.isNotEmpty) {
-                        _manualAccountDigitsCtrl.text = last3;
-                      }
                       _montoCtrl.text = monto > 0
                           ? monto.toStringAsFixed(2)
                           : '';
@@ -381,23 +320,10 @@ class _DepositoFormState extends State<DepositoForm> {
                     ),
                 ] else ...[
                   const Text(
-                    'No se detectó cuenta destino en el comprobante.',
+                    'Ingrese el monto Total',
                     style: TextStyle(color: Colors.orange),
                   ),
                 ],
-
-                const SizedBox(height: 8),
-
-                TextFormField(
-                  controller: _manualAccountDigitsCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText:
-                        'Últimos 3-4 dígitos de la cuenta destino (requerido si OCR no detecta o no coincide)',
-                    helperText: 'Ingrese solo dígitos, ejemplo: 5678 o 678',
-                  ),
-                  validator: _manualDigitsValidator,
-                ),
 
                 const SizedBox(height: 12),
 
@@ -415,186 +341,105 @@ class _DepositoFormState extends State<DepositoForm> {
 
                 const SizedBox(height: 12),
 
-                // Seleccionar familia (obligatorio para depósitos familiares)
-                StreamBuilder<List<Map<String, dynamic>>>(
-                  stream: _service.streamFamilias(),
-                  builder: (context, snap) {
-                    if (!snap.hasData) return const SizedBox.shrink();
-                    final familias = snap.data!;
-                    return DropdownButtonFormField<String>(
-                      initialValue: _selectedFamiliaId,
-                      decoration: const InputDecoration(
-                        labelText: 'Grupo familiar (seleccione)',
-                      ),
-                      items: familias
-                          .map(
-                            (f) => DropdownMenuItem(
-                              value: f['id'] as String?,
-                              child: Text(f['nombre_grupo'] ?? 'Grupo'),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) async {
-                        setState(() {
-                          _selectedFamiliaId = v;
-                          _currentFamilyUsuarios = [];
-                        });
-                        if (v != null && v.isNotEmpty) {
-                          try {
-                            final fam = await _service.getFamiliaById(v);
-                            if (fam != null) {
-                              final miembros =
-                                  (fam['miembros'] as List<dynamic>?)
-                                      ?.map(
-                                        (e) => (e is Map)
-                                            ? (e['id_usuario'] ?? '')
-                                            : e,
-                                      )
-                                      .whereType<String>()
-                                      .toList() ??
-                                  [];
-                              if (miembros.isNotEmpty) {
-                                final users = await _service.getUsuariosByIds(
-                                  miembros,
-                                );
-                                if (mounted) {
-                                  setState(
-                                    () => _currentFamilyUsuarios = users,
-                                  );
-                                }
-                              }
-                            }
-                          } catch (_) {}
-                        }
-                      },
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 12),
-
-                // Sección de miembros (obligatorio para depósitos familiares)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Miembros (familia - obligatorio):',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    TextButton.icon(
-                      onPressed: () =>
-                          setState(() => _members.add(_MemberEntry())),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Agregar'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                for (var i = 0; i < _members.length; i++)
+                // Mensaje de advertencia si hay multas y es después del día 10
+                if (_hasMultas && _esDepuesDiaDiez) ...[
                   Card(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    color: Colors.orange[50],
                     child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: _members[i].selectedUid,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Miembro (seleccionar)',
-                                  ),
-                                  items: _currentFamilyUsuarios
-                                      .map(
-                                        (u) => DropdownMenuItem(
-                                          value: u.id,
-                                          child: Text(u.nombres),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (v) => setState(() {
-                                    _members[i].selectedUid = v;
-                                  }),
-                                  validator: (v) => (v == null || v.isEmpty)
-                                      ? 'Seleccione miembro'
-                                      : null,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: _members[i].tipo,
-                                  isExpanded: true,
-                                  isDense: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Tipo',
-                                  ),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: 'ahorro',
-                                      child: Text('Ahorro'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'pago_prestamo',
-                                      child: Text('Pago préstamo'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'plazo_fijo',
-                                      child: Text('Plazo fijo'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'certificado',
-                                      child: Text('Certificado'),
-                                    ),
-                                  ],
-                                  onChanged: (v) => setState(
-                                    () => _members[i].tipo = v ?? 'ahorro',
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                width: 40,
-                                child: IconButton(
-                                  padding: EdgeInsets.zero,
-                                  iconSize: 20,
-                                  icon: const Icon(
-                                    Icons.delete,
-                                    color: Colors.red,
-                                  ),
-                                  onPressed: () => setState(() {
-                                    _members[i].dispose();
-                                    _members.removeAt(i);
-                                  }),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _members[i].montoCtrl,
-                                  keyboardType: TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Monto miembro',
-                                  ),
-                                  validator: (v) => (v == null || v.isEmpty)
-                                      ? 'Ingrese monto'
-                                      : null,
-                                ),
-                              ),
-                            ],
+                      padding: const EdgeInsets.all(12.0),
+                      child: Row(
+                        children: const [
+                          Icon(Icons.warning, color: Colors.orange),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Tiene multas pendientes. Debe pagarlas desde el apartado de multas. Los tipos "Ahorro mensual" y "Pago préstamo" están desactivados.',
+                              style: TextStyle(fontSize: 13),
+                            ),
                           ),
                         ],
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                ],
+
+                const SizedBox(height: 12),
+                // Selector de tipo de depósito (depósito personal)
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedTipo,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Tipo de depósito',
+                    border: OutlineInputBorder(),
+                    helperText: 'Seleccione el tipo de depósito a realizar',
+                  ),
+                  items: [
+                    // Ahorro mensual y Pago préstamo desactivados si hay multas después del día 10
+                    DropdownMenuItem(
+                      value: 'ahorro',
+                      enabled: !(_hasMultas && _esDepuesDiaDiez),
+                      child: Row(
+                        children: [
+                          Text(
+                            'Ahorro (mensual)',
+                            style: TextStyle(
+                              color: (_hasMultas && _esDepuesDiaDiez)
+                                  ? Colors.grey
+                                  : Colors.black,
+                            ),
+                          ),
+                          if (_hasMultas && _esDepuesDiaDiez)
+                            const SizedBox(width: 8),
+                          if (_hasMultas && _esDepuesDiaDiez)
+                            const Icon(
+                              Icons.block,
+                              size: 16,
+                              color: Colors.red,
+                            ),
+                        ],
+                      ),
+                    ),
+                    DropdownMenuItem(
+                      value: 'pago_prestamo',
+                      enabled: !(_hasMultas && _esDepuesDiaDiez),
+                      child: Row(
+                        children: [
+                          Text(
+                            'Pago préstamo',
+                            style: TextStyle(
+                              color: (_hasMultas && _esDepuesDiaDiez)
+                                  ? Colors.grey
+                                  : Colors.black,
+                            ),
+                          ),
+                          if (_hasMultas && _esDepuesDiaDiez)
+                            const SizedBox(width: 8),
+                          if (_hasMultas && _esDepuesDiaDiez)
+                            const Icon(
+                              Icons.block,
+                              size: 16,
+                              color: Colors.red,
+                            ),
+                        ],
+                      ),
+                    ),
+                    const DropdownMenuItem(
+                      value: 'plazo_fijo',
+                      child: Text('Plazo fijo'),
+                    ),
+                    const DropdownMenuItem(
+                      value: 'certificado',
+                      child: Text('Certificado de aportación'),
+                    ),
+                    const DropdownMenuItem(
+                      value: 'ahorro_voluntario',
+                      child: Text('Ahorro voluntario'),
+                    ),
+                  ],
+                  onChanged: (v) =>
+                      setState(() => _selectedTipo = v ?? 'ahorro'),
+                ),
 
                 const SizedBox(height: 12),
 
@@ -626,3 +471,6 @@ class _DepositoFormState extends State<DepositoForm> {
     );
   }
 }
+
+// Si usas Firebase Auth en el front:
+// (await import('firebase/auth')).getAuth().currentUser.getIdToken(true).then(console.log)

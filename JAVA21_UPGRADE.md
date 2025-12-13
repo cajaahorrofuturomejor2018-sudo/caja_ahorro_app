@@ -56,6 +56,20 @@ flutter clean; flutter pub get; flutter build apk --release -v
 
 6) Si quieres que yo aplique cambios mínimos al repositorio (comentados) lo puedo hacer, pero los pasos que alteran JDK local no se pueden ejecutar desde aquí: debes instalar el JDK 21 y/o indicarme la ruta exacta si quieres que inserte `org.gradle.java.home` en `gradle.properties`.
 
+Nota: En este repositorio los ajustes necesarios para Java 21 ya están aplicados:
+- `android/app/build.gradle.kts`: `compileOptions.sourceCompatibility/targetCompatibility` cambian a `JavaVersion.VERSION_21`.
+- `android/app/build.gradle.kts`: `kotlinOptions.jvmTarget` establecido a `"21"`.
+- `android/gradle.properties`: `org.gradle.java.installations.auto-download=true` para permitir que Gradle descargue una JDK compatible automáticamente.
+
+Para completar la migración en tu máquina local:
+1. Instala JDK 21 (p. ej. Temurin/Adoptium) y añade su path a `JAVA_HOME` o configura `org.gradle.java.home` en `android/gradle.properties`.
+2. Ejecuta desde `android`:
+  - `./gradlew.bat -v` para comprobar la versión de Java que está usando Gradle.
+  - `./gradlew.bat assembleDebug` para compilar la app con JDK 21.
+3. Si la build falla por incompatibilidades, revisa los logs y actualiza dependencias o plugins (AGP, Kotlin) según las recomendaciones de los errores.
+
+Si quieres, puedo añadir un script para validar localmente que la máquina usa JDK 21 y que Gradle se ejecuta con él.
+
 7) Notas finales
 
 - Recomendación: haz estos cambios en una rama nueva, ejecuta la build en un emulador/CI y verifica. Si surge algún error, puedo ayudarte a interpretar los logs y proponer correcciones (actualizar versiones de plugins, migrar llamadas obsoletas, etc.).

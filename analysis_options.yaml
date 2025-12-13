@@ -26,3 +26,10 @@ linter:
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
+
+# Exclude generated files and backup/admin web folders from analysis to avoid
+# showing analyzer errors for archived or non-Flutter code.
+analyzer:
+  exclude:
+    - admin/backup_mobile_admin/**
+    - admin/web/**

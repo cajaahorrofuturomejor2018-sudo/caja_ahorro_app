@@ -54,9 +54,20 @@ class FirestoreService {
 
   // Utility: parse detalle_por_usuario defensively when elements may be Map or JSON-encoded String
   List<Map<String, dynamic>>? _parseDetalle(dynamic raw) {
-    if (raw is List) {
+    // Support both List and JSON-encoded String forms. Some clients may store
+    // the detalle as a JSON string (e.g. '[{"id_usuario":"...","monto":10}]').
+    dynamic source = raw;
+    if (raw is String) {
+      try {
+        source = jsonDecode(raw);
+      } catch (_) {
+        // leave as String if decode fails; will return null below
+      }
+    }
+
+    if (source is List) {
       final parsed = <Map<String, dynamic>>[];
-      for (final e in raw) {
+      for (final e in source) {
         if (e is Map) {
           parsed.add(Map<String, dynamic>.from(e));
         } else if (e is String) {
@@ -133,7 +144,13 @@ class FirestoreService {
       final int voucherTtl = (voucherCfg?['ttl_days'] ?? 0) as int;
       final voucherHash = deposito.voucherHash ?? '';
       if (voucherBlockEnabled && voucherHash.isNotEmpty) {
-        final isDup = await _isVoucherDuplicate(voucherHash, voucherTtl, '');
+        final fileHash = deposito.voucherFileHash ?? '';
+        final isDup = await _isVoucherDuplicate(
+          voucherHash,
+          fileHash,
+          voucherTtl,
+          '',
+        );
         AppLogger.info('addDeposito duplicateCheck', {'isDup': isDup});
         if (isDup) {
           throw Exception(
@@ -255,10 +272,27 @@ class FirestoreService {
     } catch (_) {}
   }
 
+  /// Obtener todos los usuarios una sola vez (para reportes agregados).
+  Future<List<Usuario>> getAllUsuarios() async {
+    final snapshot = await _db.collection('usuarios').get();
+    return snapshot.docs.map((d) => Usuario.fromFirestore(d)).toList();
+  }
+
   /// Obtener todos los depósitos una sola vez (para reportes agregados).
-  Future<List<Deposito>> getAllDepositosOnce() async {
+  Future<List<Deposito>> getAllDepositos() async {
     final snapshot = await _db.collection('depositos').get();
     return snapshot.docs.map((d) => Deposito.fromFirestore(d)).toList();
+  }
+
+  /// Alias para compatibilidad.
+  Future<List<Deposito>> getAllDepositosOnce() async {
+    return getAllDepositos();
+  }
+
+  /// Obtener todos los préstamos una sola vez (para reportes agregados).
+  Future<List<Prestamo>> getAllPrestamos() async {
+    final snapshot = await _db.collection('prestamos').get();
+    return snapshot.docs.map((d) => Prestamo.fromFirestore(d)).toList();
   }
 
   /// Obtener totsales agregados (ej. sumas de depósitos y préstamos).
@@ -324,34 +358,98 @@ class FirestoreService {
   /// Comprueba si existe un voucher con el mismo hash dentro del TTL (días).
   Future<bool> _isVoucherDuplicate(
     String voucherHash,
+    String voucherFileHash,
     int ttlDays,
     String currentDepositId,
   ) async {
     AppLogger.info('_isVoucherDuplicate start', {
       'voucherHash': voucherHash,
+      'voucherFileHash': voucherFileHash,
       'ttlDays': ttlDays,
     });
-    if (voucherHash.isEmpty) return false;
-    final q = await _db
-        .collection('depositos')
-        .where('voucher_hash', isEqualTo: voucherHash)
-        .get();
-    AppLogger.info('_isVoucherDuplicate queryResult', {'found': q.docs.length});
-    for (final d in q.docs) {
-      AppLogger.info('_isVoucherDuplicate checking doc', {'docId': d.id});
-      if (d.id == currentDepositId) continue;
-      if (ttlDays > 0) {
-        final ts = d.data()['fecha_registro'] as Timestamp?;
-        if (ts != null) {
-          final age = DateTime.now().difference(ts.toDate()).inDays;
-          AppLogger.info('_isVoucherDuplicate age days', {'age': age});
-          if (age <= ttlDays) return true;
+    // Check by voucher_hash if provided
+    if (voucherHash.isNotEmpty) {
+      final q = await _db
+          .collection('depositos')
+          .where('voucher_hash', isEqualTo: voucherHash)
+          .get();
+      AppLogger.info('_isVoucherDuplicate queryResult (hash)', {
+        'found': q.docs.length,
+      });
+      for (final d in q.docs) {
+        AppLogger.info('_isVoucherDuplicate checking doc (hash)', {
+          'docId': d.id,
+        });
+        if (d.id == currentDepositId) continue;
+        if (ttlDays > 0) {
+          final ts = d.data()['fecha_registro'] as Timestamp?;
+          if (ts != null) {
+            final age = DateTime.now().difference(ts.toDate()).inDays;
+            AppLogger.info('_isVoucherDuplicate age days', {'age': age});
+            if (age <= ttlDays) return true;
+          }
+        } else {
+          return true;
         }
-      } else {
-        return true;
       }
     }
+
+    // Check by voucher_file_hash if provided
+    if (voucherFileHash.isNotEmpty) {
+      final q2 = await _db
+          .collection('depositos')
+          .where('voucher_file_hash', isEqualTo: voucherFileHash)
+          .get();
+      AppLogger.info('_isVoucherDuplicate queryResult (fileHash)', {
+        'found': q2.docs.length,
+      });
+      for (final d in q2.docs) {
+        AppLogger.info('_isVoucherDuplicate checking doc (fileHash)', {
+          'docId': d.id,
+        });
+        if (d.id == currentDepositId) continue;
+        if (ttlDays > 0) {
+          final ts = d.data()['fecha_registro'] as Timestamp?;
+          if (ts != null) {
+            final age = DateTime.now().difference(ts.toDate()).inDays;
+            AppLogger.info('_isVoucherDuplicate age days', {'age': age});
+            if (age <= ttlDays) return true;
+          }
+        } else {
+          return true;
+        }
+      }
+    }
+
     return false;
+  }
+
+  /// Public wrapper to check if a voucher hash is considered duplicate based on
+  /// current configuration. Returns true if duplicate and the configuration
+  /// blocks reuse.
+  Future<bool> isVoucherDuplicate(
+    String voucherHash, {
+    String voucherFileHash = '',
+  }) async {
+    try {
+      final cfg = await getConfiguracion();
+      final voucherCfg =
+          (cfg?['voucher_reuse_block'] ?? {}) as Map<String, dynamic>?;
+      final bool voucherBlockEnabled =
+          (voucherCfg?['enabled'] ?? false) as bool;
+      final int voucherTtl = (voucherCfg?['ttl_days'] ?? 0) as int;
+      if (!voucherBlockEnabled) return false;
+      return await _isVoucherDuplicate(
+        voucherHash,
+        voucherFileHash,
+        voucherTtl,
+        '',
+      );
+    } catch (_) {
+      // If config can't be read, be permissive (do not block) to avoid
+      // preventing legitimate deposits due to transient errors.
+      return false;
+    }
   }
 
   /// Calcula la multa (si aplica) de un depósito según configuración y fecha detectada.
@@ -360,52 +458,110 @@ class FirestoreService {
     Map<String, dynamic>? config,
   ) {
     try {
-      final enforceDate = (config?['enforce_voucher_date'] ?? false) as bool;
+      // If enforcement of voucher date is disabled, no penalty
+      // Si no hay configuración explícita, por defecto ENFORCE en true para evitar que se salten multas
+      final enforceDate = (config?['enforce_voucher_date'] ?? true) as bool;
       if (!enforceDate) return 0.0;
-      final detected = depData['fecha_deposito_detectada'] as String?;
-      final dueRaw = (config?['due_schedule_json'] ?? '') as String?;
-      final grace = (config?['grace_days'] ?? 0) as int;
-      if (detected == null ||
-          detected.isEmpty ||
-          dueRaw == null ||
-          dueRaw.isEmpty) {
-        return 0.0;
-      }
+
+      // Determine detected deposit date (flexible parsing)
+      final detectedRaw = depData['fecha_deposito_detectada'] as String?;
       DateTime? detectedDate;
-      DateTime? dueDate;
-      try {
-        detectedDate = DateTime.parse(detected);
-      } catch (_) {
-        detectedDate = null;
-      }
-      if (detectedDate == null) return 0.0;
-      try {
-        dueDate = DateTime.parse(dueRaw);
-      } catch (_) {
+      DateTime? tryParseFlexibleDate(String? raw) {
+        if (raw == null || raw.isEmpty) return null;
         try {
-          final m = jsonDecode(dueRaw);
-          if (m is Map && m.values.isNotEmpty) {
-            final first = m.values.first;
-            if (first is String) dueDate = DateTime.parse(first);
+          return DateTime.parse(raw);
+        } catch (_) {}
+        try {
+          final s = raw.trim();
+          final sep = s.contains('/') ? '/' : (s.contains('-') ? '-' : null);
+          if (sep == null) return null;
+          final parts = s
+              .split(sep)
+              .map((p) => p.replaceAll(RegExp(r'[^0-9]'), ''))
+              .toList();
+          if (parts.length < 3) return null;
+          var a = int.tryParse(parts[0]) ?? 0;
+          var b = int.tryParse(parts[1]) ?? 0;
+          var c = int.tryParse(parts[2]) ?? 0;
+          if (c < 100) c += 2000;
+          if (a > 31) {
+            return DateTime(a, b, c);
           }
+          return DateTime(c, b, a);
         } catch (_) {
-          dueDate = null;
+          return null;
         }
       }
-      if (dueDate == null) return 0.0;
-      final cutoff = dueDate.add(Duration(days: grace));
-      if (detectedDate.isAfter(cutoff)) {
-        final pen = (config?['penalty'] ?? {}) as Map<String, dynamic>?;
-        final pType = (pen?['type'] ?? 'percent').toString();
-        final pVal = (pen?['value'] ?? 0).toDouble();
-        final monto = (depData['monto'] ?? 0).toDouble();
-        if (pType == 'percent') return (monto * pVal / 100.0);
-        return pVal;
+
+      detectedDate = tryParseFlexibleDate(detectedRaw);
+      if (detectedDate == null) {
+        // fallback: if depData has fecha_deposito as Timestamp
+        try {
+          final ts = depData['fecha_deposito'] as Timestamp?;
+          if (ts != null) detectedDate = ts.toDate();
+        } catch (_) {}
       }
-      return 0.0;
+      if (detectedDate == null) return 0.0;
+
+      final tipo = (depData['tipo'] as String?) ?? 'ahorro';
+      final monto = (depData['monto'] ?? 0).toDouble();
+
+      // Rule: monthly window is day 1..10 inclusive
+      // Deadline is END OF DAY 10 (23:59:59) of the same month
+      final dayOfMonth = detectedDate.day;
+
+      // If deposit is on day 1-10, it's on time
+      if (dayOfMonth <= 10) return 0.0;
+
+      // Calculate days late starting from day 11 (00:00)
+      // daysLate: day 11 = 1, day 12 = 2, ..., day 18 = 8, day 25 = 15, etc.
+      final daysLate = dayOfMonth - 10;
+
+      // Ahorro mensual: $1 per each started 7-day period of delay from day 11
+      if (tipo == 'ahorro' || tipo == 'ahorro_voluntario') {
+        // Formula: 1-7 days = 1 week, 8-14 days = 2 weeks, 15-21 days = 3 weeks, etc.
+        final weeks = ((daysLate - 1) ~/ 7) + 1;
+        final penaltyPerWeek =
+            (config?['penalty_rules']?['ahorro_per_week'] ?? 1.0).toDouble();
+        return (weeks * penaltyPerWeek) as double;
+      }
+
+      // Pago préstamo: apply percent of the cuota (we approximate cuota == monto del voucher)
+      // 7% for days 1-15 late, 10% for days 16-30 late, then accumulates 10% per 30 days
+      if (tipo == 'pago_prestamo') {
+        // within 1-15 days late -> 7% of cuota
+        if (daysLate <= 15) {
+          return monto * 0.07;
+        }
+        // 16-30 days late -> 10% of cuota
+        if (daysLate <= 30) {
+          return monto * 0.10;
+        }
+        // beyond 30 days late: apply 10% per 30-day period (accumulate)
+        if (daysLate > 30) {
+          final periods = ((daysLate - 1) ~/ 30) + 1;
+          return monto * 0.10 * periods;
+        }
+        return 0.0;
+      }
+
+      // Multas and other types: generic penalty configured as percent or fixed
+      final pen = (config?['penalty'] ?? {}) as Map<String, dynamic>?;
+      final pType = (pen?['type'] ?? 'percent').toString();
+      final pVal = (pen?['value'] ?? 0).toDouble();
+      if (pType == 'percent') return (monto * pVal / 100.0);
+      return pVal;
     } catch (_) {
       return 0.0;
     }
+  }
+
+  /// Public wrapper for penalty computation (useful for tests).
+  double computePenaltyForDeposit(
+    Map<String, dynamic> depData,
+    Map<String, dynamic>? config,
+  ) {
+    return _computePenaltyForDeposit(depData, config);
   }
 
   // --- Notificaciones y movimientos ---
@@ -572,8 +728,14 @@ class FirestoreService {
           (voucherCfg?['enabled'] ?? false) as bool;
       final int voucherTtl = (voucherCfg?['ttl_days'] ?? 0) as int;
       final voucherHash = (p['voucher_hash'] ?? '') as String? ?? '';
+      final voucherFileHash = (p['voucher_file_hash'] ?? '') as String? ?? '';
       if (voucherBlockEnabled && voucherHash.isNotEmpty) {
-        final isDup = await _isVoucherDuplicate(voucherHash, voucherTtl, '');
+        final isDup = await _isVoucherDuplicate(
+          voucherHash,
+          voucherFileHash,
+          voucherTtl,
+          '',
+        );
         if (isDup) {
           throw Exception(
             'Voucher duplicado detectado (bloqueado por configuración)',
@@ -595,6 +757,8 @@ class FirestoreService {
     required bool approve,
     String? observaciones,
     List<Map<String, dynamic>>? detalleOverride,
+    // multasPorUsuario: mapa opcional {idUsuario: montoMulta}
+    Map<String, double>? multasPorUsuario,
   }) async {
     AppLogger.info('approveDeposito start', {
       'depositoId': depositoId,
@@ -618,11 +782,14 @@ class FirestoreService {
           (voucherCfg?['enabled'] ?? false) as bool;
       final int voucherTtl = (voucherCfg?['ttl_days'] ?? 0) as int;
       final String? voucherHash = depDataPre['voucher_hash'] as String?;
+      final String? voucherFileHash =
+          depDataPre['voucher_file_hash'] as String?;
       if (voucherBlockEnabled &&
           voucherHash != null &&
           voucherHash.isNotEmpty) {
         final isDup = await _isVoucherDuplicate(
           voucherHash,
+          voucherFileHash ?? '',
           voucherTtl,
           depositoId,
         );
@@ -679,27 +846,64 @@ class FirestoreService {
         montoSobrante = (sobranteCents / 100.0);
       }
 
+      // --- Importante: Firestore requiere que todas las lecturas ocurran antes de las escrituras
+      // Recolectamos los UIDs a leer primero, hacemos todos los tx.get(...) y solo después
+      // aplicamos las actualizaciones (tx.update/tx.set).
+      final Set<String> uidsToRead = {};
       if (detalle == null || detalle.isEmpty) {
-        // reparto simple: usar id_usuario y monto
         final idUsuario = depData['id_usuario'] as String?;
-        final monto = (depData['monto'] ?? 0).toDouble();
         if (idUsuario == null || idUsuario.isEmpty) {
           throw Exception('Depósito sin id_usuario');
         }
+        uidsToRead.add(idUsuario);
+        if (multaMonto > 0) {
+          uidsToRead.add(idUsuario);
+        }
+      } else {
+        for (final part in detalle) {
+          final idUsuario = part['id_usuario'] as String?;
+          if (idUsuario != null && idUsuario.isNotEmpty) {
+            uidsToRead.add(idUsuario);
+          }
+        }
+        if (multaMonto > 0) {
+          final autorId = depData['id_usuario'] as String?;
+          if (autorId != null && autorId.isNotEmpty) {
+            uidsToRead.add(autorId);
+          }
+        }
+      }
 
-        final userRef = _db.collection('usuarios').doc(idUsuario);
-        final userSnap = await tx.get(userRef);
-        if (!userSnap.exists) {
+      // Incluir UIDs para multas por usuario si fueron pasadas
+      if (multasPorUsuario != null && multasPorUsuario.isNotEmpty) {
+        for (final uid in multasPorUsuario.keys) {
+          if (uid.isNotEmpty) uidsToRead.add(uid);
+        }
+      }
+
+      // Ejecutar todas las lecturas primero
+      final Map<String, DocumentSnapshot> userSnaps = {};
+      for (final uid in uidsToRead) {
+        final snap = await tx.get(_db.collection('usuarios').doc(uid));
+        userSnaps[uid] = snap;
+      }
+
+      // Ahora aplicar las escrituras basadas en los documentos leídos
+      if (detalle == null || detalle.isEmpty) {
+        final idUsuario = depData['id_usuario'] as String?;
+        final monto = (depData['monto'] ?? 0).toDouble();
+        final userSnap = userSnaps[idUsuario];
+        if (userSnap == null || !userSnap.exists) {
           throw Exception('Usuario del depósito no encontrado');
         }
         final userData = userSnap.data() as Map<String, dynamic>;
-        // Determinar campo a actualizar según el tipo del depósito
         final depTipo = (depData['tipo'] as String?) ?? 'ahorro';
         final targetField = _fieldForTipo(depTipo);
         final current = (userData[targetField] ?? 0).toDouble();
-        tx.update(userRef, {targetField: current + monto});
+        tx.update(_db.collection('usuarios').doc(idUsuario), {
+          targetField: current + monto,
+        });
 
-        // crear movimiento; usar el tipo del depósito como tipo de movimiento para facilitar reportes
         final movimientoTipo = depTipo.isNotEmpty ? depTipo : 'deposito';
         tx.set(_db.collection('movimientos').doc(), {
           'id_usuario': idUsuario,
@@ -710,39 +914,48 @@ class FirestoreService {
           'descripcion': depData['descripcion'] ?? 'Depósito aprobado',
           'registrado_por': adminUid,
         });
-        // aplicar multa al autor si corresponde (se suma a total_multas)
+
         if (multaMonto > 0) {
-          final autorId = depData['id_usuario'] as String?;
-          if (autorId != null && autorId.isNotEmpty) {
-            final autorRef = _db.collection('usuarios').doc(autorId);
-            final autorSnap = await tx.get(autorRef);
-            if (autorSnap.exists) {
-              final autorData = autorSnap.data() as Map<String, dynamic>;
-              final currentMultas = (autorData['total_multas'] ?? 0).toDouble();
-              tx.update(autorRef, {'total_multas': currentMultas + multaMonto});
-            }
+          // Las multas se dirigen al saldo de la caja (caja/estado).
+          final cajaRef = _db.collection('caja').doc('estado');
+          final cajaSnap = await tx.get(cajaRef);
+          double currentCaja = 0.0;
+          if (cajaSnap.exists) {
+            final cdata = cajaSnap.data() as Map<String, dynamic>;
+            currentCaja = (cdata['saldo'] ?? 0).toDouble();
           }
+          tx.update(cajaRef, {'saldo': currentCaja + multaMonto});
+
+          // Registrar movimiento de multa para auditoría (asociado al autor)
+          final autorId = depData['id_usuario'] as String?;
+          tx.set(_db.collection('movimientos').doc(), {
+            'id_usuario': autorId ?? '',
+            'tipo': 'multa',
+            'referencia_id': depositoId,
+            'monto': multaMonto,
+            'fecha': FieldValue.serverTimestamp(),
+            'descripcion': 'Multa por depósito tardío',
+            'registrado_por': adminUid,
+          });
         }
       } else {
-        // reparto entre varios usuarios
         for (final part in detalle) {
           final idUsuario = part['id_usuario'] as String?;
           final monto = (part['monto'] ?? 0).toDouble();
           if (idUsuario == null || idUsuario.isEmpty) continue;
-          final userRef = _db.collection('usuarios').doc(idUsuario);
-          final userSnap = await tx.get(userRef);
-          if (!userSnap.exists) continue;
+          final userSnap = userSnaps[idUsuario];
+          if (userSnap == null || !userSnap.exists) continue;
           final userData = userSnap.data() as Map<String, dynamic>;
-          // Determinar el tipo para esta parte (si el detalle lo define) y elegir campo correcto
           final partTipo =
               (part['tipo'] as String?) ??
               (depData['tipo'] as String?) ??
               'ahorro';
           final targetField = _fieldForTipo(partTipo);
           final current = (userData[targetField] ?? 0).toDouble();
-          tx.update(userRef, {targetField: current + monto});
+          tx.update(_db.collection('usuarios').doc(idUsuario), {
+            targetField: current + monto,
+          });
 
-          // crear movimiento por cada parte usando su tipo
           final movimientoTipo = partTipo.isNotEmpty ? partTipo : 'deposito';
           tx.set(_db.collection('movimientos').doc(), {
             'id_usuario': idUsuario,
@@ -755,18 +968,53 @@ class FirestoreService {
             'registrado_por': adminUid,
           });
         }
-        // aplicar multa al autor si corresponde (se suma a total_multas)
-        if (multaMonto > 0) {
-          final autorId = depData['id_usuario'] as String?;
-          if (autorId != null && autorId.isNotEmpty) {
-            final autorRef = _db.collection('usuarios').doc(autorId);
-            final autorSnap = await tx.get(autorRef);
-            if (autorSnap.exists) {
-              final autorData = autorSnap.data() as Map<String, dynamic>;
-              final currentMultas = (autorData['total_multas'] ?? 0).toDouble();
-              tx.update(autorRef, {'total_multas': currentMultas + multaMonto});
-            }
+
+        // Aplicar multas por usuario especificadas por el admin (si las hay)
+        // Acumular multas que deben ir a la caja y registrar movimientos de multa
+        double multasSum = 0.0;
+        if (multasPorUsuario != null && multasPorUsuario.isNotEmpty) {
+          for (final entry in multasPorUsuario.entries) {
+            final targetUid = entry.key;
+            final multa = entry.value;
+            if (multa <= 0) continue;
+            multasSum += multa;
+
+            // Movimiento contable por multa (audit trail)
+            tx.set(_db.collection('movimientos').doc(), {
+              'id_usuario': targetUid,
+              'tipo': 'multa',
+              'referencia_id': depositoId,
+              'monto': multa,
+              'fecha': FieldValue.serverTimestamp(),
+              'descripcion': 'Multa aplicada por admin durante revisión',
+              'registrado_por': adminUid,
+            });
           }
+        }
+
+        if (multaMonto > 0) {
+          multasSum += multaMonto;
+          final autorId = depData['id_usuario'] as String?;
+          tx.set(_db.collection('movimientos').doc(), {
+            'id_usuario': autorId ?? '',
+            'tipo': 'multa',
+            'referencia_id': depositoId,
+            'monto': multaMonto,
+            'fecha': FieldValue.serverTimestamp(),
+            'descripcion': 'Multa por depósito tardío',
+            'registrado_por': adminUid,
+          });
+        }
+
+        if (multasSum > 0) {
+          final cajaRef = _db.collection('caja').doc('estado');
+          final cajaSnap2 = await tx.get(cajaRef);
+          double currentCaja2 = 0.0;
+          if (cajaSnap2.exists) {
+            final cdata2 = cajaSnap2.data() as Map<String, dynamic>;
+            currentCaja2 = (cdata2['saldo'] ?? 0).toDouble();
+          }
+          tx.update(cajaRef, {'saldo': currentCaja2 + multasSum});
         }
       }
 
@@ -925,16 +1173,33 @@ class FirestoreService {
   Stream<List<Map<String, dynamic>>> streamNotificacionesParaUsuario(
     String uid,
   ) {
+    // Some Firestore deployments may require a composite index for a
+    // where(id_usuario) + orderBy(fecha_envio) query. To be resilient and
+    // avoid a hard failure in clients that don't have that index created,
+    // we fetch the snapshots with the equality filter only and then sort
+    // client-side by fecha_envio (descending).
     return _db
         .collection('notificaciones')
         .where('id_usuario', isEqualTo: uid)
-        .orderBy('fecha_envio', descending: true)
         .snapshots()
-        .map(
-          (s) => s.docs
+        .map((s) {
+          final list = s.docs
               .map((d) => Map<String, dynamic>.from(d.data() as Map))
-              .toList(),
-        );
+              .toList();
+          // Sort client-side by fecha_envio (most recent first)
+          list.sort((a, b) {
+            try {
+              final ta = a['fecha_envio'] as Timestamp?;
+              final tb = b['fecha_envio'] as Timestamp?;
+              final da = ta?.toDate().millisecondsSinceEpoch ?? 0;
+              final db = tb?.toDate().millisecondsSinceEpoch ?? 0;
+              return db.compareTo(da);
+            } catch (_) {
+              return 0;
+            }
+          });
+          return list;
+        });
   }
 
   Future<String> requestPrestamo(Map<String, dynamic> payload) async {
@@ -1027,6 +1292,11 @@ class FirestoreService {
         fechaInicio.month + intPlazo,
         fechaInicio.day,
       );
+      final primeraCuota = DateTime(
+        fechaInicio.year,
+        fechaInicio.month + 1,
+        fechaInicio.day,
+      );
 
       // Marcar como activo y preparar estado para cobro de cuotas
       tx.update(preRef, {
@@ -1042,6 +1312,7 @@ class FirestoreService {
         'fecha_aprobacion': FieldValue.serverTimestamp(),
         'saldo_pendiente': montoFinal,
         'meses_restantes': intPlazo,
+        'proxima_fecha_cuota': Timestamp.fromDate(primeraCuota),
       });
 
       // crear movimiento contable por desembolso
@@ -1094,6 +1365,12 @@ class FirestoreService {
 
       final intPlazo = (data['plazo_meses'] as num?)?.toInt() ?? 12;
       final rate = (data['interes'] ?? 0).toDouble() / 100.0;
+      final fechaInicio = DateTime.now();
+      final primeraCuota = DateTime(
+        fechaInicio.year,
+        fechaInicio.month + 1,
+        fechaInicio.day,
+      );
 
       // calcular cuota (simplificado)
       double cuota = montoAprobado / intPlazo;
@@ -1106,13 +1383,14 @@ class FirestoreService {
       }
 
       tx.update(preRef, {
-        'estado': 'aprobado',
+        'estado': 'activo',
         'id_admin_aprobador': adminUid,
         'monto_aprobado': montoAprobado,
         'cuota_mensual': cuota,
         'contrato_pdf_url': contratoUrl,
         'observaciones': observaciones ?? '',
         'fecha_aprobacion': FieldValue.serverTimestamp(),
+        'proxima_fecha_cuota': Timestamp.fromDate(primeraCuota),
       });
 
       // crear movimiento contable
@@ -1174,11 +1452,15 @@ class FirestoreService {
         mesesRestantes = (saldoPendiente / cuota).ceil();
       }
 
+      final now = DateTime.now();
+      final proximaCuota = DateTime(now.year, now.month + 1, now.day);
+
       final updates = <String, dynamic>{
         'historial_pagos': historial,
         'saldo_pendiente': saldoPendiente,
         'meses_restantes': mesesRestantes,
         'fecha_ultimo_pago': FieldValue.serverTimestamp(),
+        'proxima_fecha_cuota': Timestamp.fromDate(proximaCuota),
       };
 
       if (saldoPendiente <= 0.001) {

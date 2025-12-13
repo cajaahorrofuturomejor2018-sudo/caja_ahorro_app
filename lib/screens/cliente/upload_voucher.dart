@@ -148,11 +148,12 @@ class _UploadVoucherState extends State<UploadVoucher> {
     setState(() => _processing = true);
     // compute voucher hash using file bytes + ocr text + monto + detected date
     String? voucherHash;
+    List<int>? fileBytes;
     try {
-      final bytes = await _image!.readAsBytes();
+      fileBytes = await _image!.readAsBytes();
       // simple hash: sha256(bytes + ocrText + monto + fechaDetectada)
       final combined = <int>[];
-      combined.addAll(bytes);
+      combined.addAll(fileBytes);
       combined.addAll(utf8.encode(_textoExtraido));
       combined.addAll(utf8.encode(parsedMonto.toString()));
       combined.addAll(utf8.encode(_fechaDetectada));
@@ -161,6 +162,27 @@ class _UploadVoucherState extends State<UploadVoucher> {
       voucherHash = null;
     }
 
+    // If we can compute a voucher hash, check duplicates BEFORE uploading the file
+    if (voucherHash != null && voucherHash.isNotEmpty) {
+      try {
+        final isDup = await firestore.isVoucherDuplicate(voucherHash);
+        if (isDup) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Comprobante duplicado detectado. Por favor sube otro comprobante distinto.',
+              ),
+            ),
+          );
+          setState(() => _processing = false);
+          return;
+        }
+      } catch (_) {
+        // If check fails, allow upload to proceed but log could be added.
+      }
+    }
+
+    // upload file after duplicate check
     final url = await storage.uploadFile(_image!, 'vauchers');
 
     final dep = Deposito(

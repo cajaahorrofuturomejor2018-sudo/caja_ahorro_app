@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // 'foundation.dart' no es necesario: los símbolos usados ya vienen de material.dart
 import '../cliente/cliente_dashboard.dart';
-import '../admin/admin_dashboard.dart';
+// Administration removed from mobile: admin portal is available on the web (admin platform).
 import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -45,13 +45,11 @@ class _SplashScreenState extends State<SplashScreen> {
           final rol = doc.data()?['rol'];
           debugPrint('SplashScreen: documento usuario existe, rol=$rol');
           if (!mounted) return;
+          // Redirect all users (including admin) to ClienteDashboard in the mobile app.
+          // Admin users should use the web-based admin dashboard.
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => rol == 'admin'
-                  ? const AdminDashboard()
-                  : const ClienteDashboard(),
-            ),
+            MaterialPageRoute(builder: (_) => const ClienteDashboard()),
           );
         } else {
           // Si no existe el documento del usuario, creamos uno mínimo para

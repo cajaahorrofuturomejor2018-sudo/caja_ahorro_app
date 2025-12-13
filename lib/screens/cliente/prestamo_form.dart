@@ -78,7 +78,9 @@ class _PrestamoFormState extends State<PrestamoForm> {
               const SizedBox(height: 25),
               ElevatedButton.icon(
                 icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Adjuntar PDF certificado (opcional)'),
+                label: const Text(
+                  'Adjuntar PDF (buro/ certificado) — obligatorio',
+                ),
                 onPressed: () async {
                   final res = await FilePicker.platform.pickFiles(
                     type: FileType.custom,
@@ -92,13 +94,23 @@ class _PrestamoFormState extends State<PrestamoForm> {
               const SizedBox(height: 12),
               Text(
                 _certificadoPath == null
-                    ? 'No se adjuntó certificado'
+                    ? 'No se adjuntó PDF (es obligatorio)'
                     : 'PDF adjuntado',
               ),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: () async {
                   if (!_formKey.currentState!.validate()) return;
+                  if (_certificadoPath == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Adjunte el PDF obligatorio (buro/certificado)',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
                   final uid = FirebaseAuth.instance.currentUser!.uid;
                   // Capturamos referencias que no dependan del BuildContext después
                   // de operaciones async para evitar use_build_context_synchronously.

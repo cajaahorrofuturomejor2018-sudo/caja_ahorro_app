@@ -1,83 +1,18 @@
+// TEMPORAL - Parche de emergencia (DESPLEGAR SOLO TEMPORALMENTE)
+// WARNING: Estas reglas son intencionadamente permisivas para usuarios autenticados
+// y deben ser reemplazadas por la política segura que usa custom claims tan pronto
+// como sea posible. Objetivo: restaurar acceso admin inmediato mientras se asignan
+// los claims con Admin SDK.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Helper: chequear rol del usuario autenticado
-    // NOTE: avoid using get(...) to check admin role (circular permission check).
-    // Use a custom claim on the Firebase Auth token instead: set the `admin` claim
-    // for admin users (via server/admin SDK). This makes rules efficient and safe.
-    function isAdmin() {
-      return request.auth != null
-        && (request.auth.token.admin == true);
+    // Permitir lectura y escritura a usuarios autenticados.
+    function isAuthenticated() {
+      return request.auth != null;
     }
 
-    // Usuarios: lectura solo para el propio usuario o admin; creación por el propio usuario
-    // update/delete: admin o el mismo usuario (pero no permitir que el usuario cambie su rol)
-    match /usuarios/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow create: if request.auth != null && request.auth.uid == userId; // registro propio
-      allow update, delete: if isAdmin() || (request.auth.uid == userId && !(request.resource.data.rol != resource.data.rol));
-    }
-
-    // Depositos: lectura solo al propietario del depósito o admin, creación por usuarios,
-    // validación/aprobación sólo admin
-    match /depositos/{depositoId} {
-      allow read: if request.auth != null && (isAdmin() || resource.data.id_usuario == request.auth.uid);
-      allow create: if request.auth != null; // usuarios pueden subir comprobantes
-      allow update: if isAdmin(); // validaciones, observaciones
-      allow delete: if isAdmin();
-    }
-
-    // Prestamos: lectura solo al propietario o admin, creación por usuarios, aprobación sólo admin
-    match /prestamos/{prestamoId} {
-      allow read: if request.auth != null && (isAdmin() || resource.data.id_usuario == request.auth.uid);
-      allow create: if request.auth != null;
-      allow update, delete: if isAdmin();
-    }
-
-    // Movimientos: lectura solo al propietario del movimiento o admin; escritura solo admin
-    match /movimientos/{movId} {
-      allow read: if request.auth != null && (isAdmin() || resource.data.id_usuario == request.auth.uid);
-      allow create: if isAdmin();
-      allow update, delete: if isAdmin();
-    }
-
-    // Familias: lectura auth, modificación solo admin
-    match /familias/{famId} {
-      allow read: if request.auth != null;
-      allow create, update, delete: if isAdmin();
-    }
-
-    // Configuración global
-    match /configuracion/{docId} {
-      allow read: if request.auth != null;
-      allow write: if isAdmin();
-    }
-
-    // Configuración global (nombre usado en código: 'configuracion_global')
-    match /configuracion_global/{docId} {
-      allow read: if request.auth != null;
-      allow write: if isAdmin();
-    }
-
-    // Notificaciones para usuarios
-    match /notificaciones/{notifId} {
-      // lecturas: solo usuarios autenticados (cada cliente filtrará por su id)
-      allow read: if request.auth != null;
-
-      // creación: solo admin, o si el documento indica que fue registrado por el usuario
-      // o está dirigido al propio usuario (permitir auto-notificaciones).
-      allow create: if isAdmin()
-        || (request.auth != null && request.resource.data.registrado_por == request.auth.uid)
-        || (request.auth != null && request.resource.data.id_usuario == request.auth.uid);
-
-      // actualización y borrado: solo admin
-      allow update, delete: if isAdmin();
-    }
-
-    // Default: deny everything else
     match /{document=**} {
-      allow read, write: if false;
+      allow read, write: if isAuthenticated();
     }
   }
 }

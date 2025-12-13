@@ -29,7 +29,6 @@ class _UserActivityWatcherState extends State<UserActivityWatcher>
     with WidgetsBindingObserver {
   Timer? _timer;
   final _auth = AuthService();
-  bool _isInBackground = false;
 
   void _resetTimer() {
     _timer?.cancel();
@@ -48,23 +47,28 @@ class _UserActivityWatcherState extends State<UserActivityWatcher>
   @override
   void initState() {
     super.initState();
-    // Nos suscribimos a los cambios de estado de la app para sólo comenzar
-    // a contar la inactividad cuando la app se ponga en background.
+    // Suscribirse a los cambios de estado de la app y arrancar el timer de
+    // inmediato para capturar inactividad en foreground y background.
     WidgetsBinding.instance.addObserver(this);
+    _resetTimer();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.detached) {
+      // La app se cerró o fue destruida por el SO: cerrar sesión al instante.
+      _onTimeout();
+      return;
+    }
+
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
-      // App no visible -> iniciar temporizador de inactividad
-      _isInBackground = true;
+      // App no visible -> arrancar timer de logout.
       _resetTimer();
     } else if (state == AppLifecycleState.resumed) {
-      // App volvió al foreground -> cancelar temporizador
-      _isInBackground = false;
-      _timer?.cancel();
+      // App volvió al foreground -> reiniciar timer para 2 min de inactividad.
+      _resetTimer();
     }
   }
 
@@ -79,14 +83,13 @@ class _UserActivityWatcherState extends State<UserActivityWatcher>
   Widget build(BuildContext context) {
     return Listener(
       behavior: HitTestBehavior.translucent,
-      // Mantener los handlers por robustez, pero ahora el temporizador
-      // sólo se activa cuando la app está en background — estos handlers
-      // son útiles si cambias la política en el futuro.
-      onPointerDown: (_) => _isInBackground ? _resetTimer() : null,
-      onPointerMove: (_) => _isInBackground ? _resetTimer() : null,
-      onPointerUp: (_) => _isInBackground ? _resetTimer() : null,
-      onPointerCancel: (_) => _isInBackground ? _resetTimer() : null,
-      onPointerSignal: (_) => _isInBackground ? _resetTimer() : null,
+      // Cada interacción reinicia el temporizador de inactividad en
+      // foreground y background para garantizar el cierre tras 2 minutos.
+      onPointerDown: (_) => _resetTimer(),
+      onPointerMove: (_) => _resetTimer(),
+      onPointerUp: (_) => _resetTimer(),
+      onPointerCancel: (_) => _resetTimer(),
+      onPointerSignal: (_) => _resetTimer(),
       child: widget.child,
     );
   }

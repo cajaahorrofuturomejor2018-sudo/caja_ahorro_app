@@ -7,6 +7,7 @@ class Deposito {
   final String tipo;
   final double monto;
   final String? voucherHash;
+  final String? voucherFileHash;
   final DateTime fechaDeposito;
   final String archivoUrl;
   final bool validado;
@@ -28,6 +29,7 @@ class Deposito {
     required this.tipo,
     required this.monto,
     this.voucherHash,
+    this.voucherFileHash,
     required this.fechaDeposito,
     required this.archivoUrl,
     this.validado = false,
@@ -49,6 +51,7 @@ class Deposito {
     'monto': monto,
     'fecha_deposito': Timestamp.fromDate(fechaDeposito),
     'voucher_hash': voucherHash,
+    'voucher_file_hash': voucherFileHash,
     'ocr_text': ocrText,
     'detected_account_raw': detectedAccountRaw,
     'detected_account_digits': detectedAccountDigits,
@@ -72,6 +75,7 @@ class Deposito {
       tipo: data['tipo'] ?? '',
       monto: (data['monto'] ?? 0).toDouble(),
       voucherHash: data['voucher_hash'] as String?,
+      voucherFileHash: data['voucher_file_hash'] as String?,
       fechaDeposito:
           (data['fecha_deposito'] as Timestamp?)?.toDate() ?? DateTime.now(),
       archivoUrl: data['archivo_url'] ?? '',

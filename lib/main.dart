@@ -6,10 +6,9 @@ import 'package:firebase_core/firebase_core.dart';
 
 import 'screens/auth/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
-import 'screens/admin/admin_dashboard.dart';
+// Admin screens removed from mobile app - admin functionality is moved to `admin` web.
 import 'screens/cliente/cliente_dashboard.dart';
-import 'screens/admin/admin_caja.dart';
-import 'screens/admin/admin_add_aporte.dart';
+// importaciones de admin removidas
 import 'widgets/user_activity_watcher.dart';
 import 'core/services/notification_service.dart';
 
@@ -67,9 +66,7 @@ class MyApp extends StatelessWidget {
         routes: {
           '/': (context) => const SplashScreen(),
           '/login': (context) => const LoginScreen(),
-          '/admin': (context) => const AdminDashboard(),
-          '/admin/caja': (context) => const AdminCajaScreen(),
-          '/admin/add_aporte': (context) => const AdminAddAporteScreen(),
+          // Admin routes removed from mobile; admin users should use the web dashboard
           '/cliente': (context) => const ClienteDashboard(),
         },
       ),

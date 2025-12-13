@@ -48,20 +48,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 obscureText: true,
               ),
               const SizedBox(height: 15),
-              DropdownButtonFormField(
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: "Rol",
+              // Role selection is limited to 'cliente' on mobile. Admins are created via the web admin panel.
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Rol: cliente (por defecto)',
+                  style: TextStyle(fontSize: 14),
                 ),
-                initialValue: rol,
-                items: const [
-                  DropdownMenuItem(value: 'cliente', child: Text('Cliente')),
-                  DropdownMenuItem(
-                    value: 'admin',
-                    child: Text('Administrador'),
-                  ),
-                ],
-                onChanged: (value) => setState(() => rol = value!),
               ),
               const SizedBox(height: 25),
               CustomButton(

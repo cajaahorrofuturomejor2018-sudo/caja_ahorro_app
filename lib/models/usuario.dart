@@ -35,9 +35,32 @@ class Usuario {
 
   factory Usuario.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    // Normalize multiple possible name fields used across environments/exports.
+    String resolveName(Map<String, dynamic> d) {
+      final candidates = [
+        'nombres',
+        'nombre',
+        'displayName',
+        'full_name',
+        'nombre_completo',
+        'nombreCompleto',
+        'name',
+      ];
+      for (final k in candidates) {
+        final v = d[k];
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+      // Try to compose from first/last name fields if present
+      final first = d['nombre'] as String? ?? '';
+      final last = d['apellido'] as String? ?? d['apellidos'] as String? ?? '';
+      final combined = '${first.trim()} ${last.trim()}'.trim();
+      if (combined.isNotEmpty) return combined;
+      return '';
+    }
+
     return Usuario(
       id: doc.id,
-      nombres: data['nombres'] ?? '',
+      nombres: resolveName(data),
       correo: data['correo'] ?? '',
       rol: data['rol'] ?? 'cliente',
       estado: data['estado'] ?? 'activo',
