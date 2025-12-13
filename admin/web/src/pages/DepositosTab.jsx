@@ -10,6 +10,15 @@ export default function DepositosTab({ user }) {
   const [showNew, setShowNew] = useState(false);
   const [approving, setApproving] = useState(null);
   const [form, setForm] = useState({ idUsuario: '', tipo: 'aporte', monto: '', descripcion: '' });
+  const [showApproveModal, setShowApproveModal] = useState(null);
+  const [approveForm, setApproveForm] = useState({
+    interes: '',
+    observaciones: '',
+    pdfFile: null,
+    uploadingPdf: false,
+    pdfUrl: ''
+  });
+  const [showVoucherModal, setShowVoucherModal] = useState(null);
 
   useEffect(() => {
     if (user?.token) {
@@ -36,6 +45,85 @@ export default function DepositosTab({ user }) {
       setError(result.error);
     }
     setLoading(false);
+  }
+
+  function openApproveModal(deposito) {
+    setShowApproveModal(deposito);
+    setApproveForm({
+      interes: deposito.tipo === 'plazo_fijo' ? '5' : deposito.tipo === 'certificado' ? '3' : '',
+      observaciones: '',
+      pdfFile: null,
+      uploadingPdf: false,
+      pdfUrl: deposito.documento_url || ''
+    });
+  }
+
+  async function uploadPdf() {
+    if (!approveForm.pdfFile) {
+      setError('Selecciona un archivo PDF primero');
+      return;
+    }
+
+    setApproveForm(prev => ({ ...prev, uploadingPdf: true }));
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', approveForm.pdfFile);
+      formData.append('folder', 'documentos_depositos');
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${user.token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) throw new Error('Error al subir el archivo');
+      
+      const data = await response.json();
+      setApproveForm(prev => ({ ...prev, pdfUrl: data.url, uploadingPdf: false }));
+      setSuccess('PDF subido correctamente');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.message || 'Error al subir PDF');
+      setApproveForm(prev => ({ ...prev, uploadingPdf: false }));
+    }
+  }
+
+  async function approveWithModal(approve = true) {
+    if (!showApproveModal) return;
+
+    const requiresPdf = showApproveModal.tipo === 'plazo_fijo' || showApproveModal.tipo === 'certificado';
+    
+    if (approve && requiresPdf && !approveForm.pdfUrl) {
+      setError('Debes subir el documento PDF antes de aprobar');
+      return;
+    }
+
+    if (approve && requiresPdf && !approveForm.interes) {
+      setError('Debes ingresar el interés %');
+      return;
+    }
+
+    setApproving(showApproveModal.id);
+    const result = await approveDeposit(
+      showApproveModal.id, 
+      approve, 
+      approveForm.observaciones,
+      approve && requiresPdf ? approveForm.interes : null,
+      approve && requiresPdf ? approveForm.pdfUrl : null
+    );
+    setApproving(null);
+
+    if (result.success) {
+      setSuccess(`Depósito ${approve ? 'aprobado' : 'rechazado'} correctamente`);
+      setTimeout(() => setSuccess(null), 3000);
+      setShowApproveModal(null);
+      load();
+    } else {
+      setError(result.error);
+    }
   }
 
   async function approve(id, approve = true) {
@@ -148,19 +236,20 @@ export default function DepositosTab({ user }) {
                   </td>
                   <td>
                     {d.archivo_url ? (
-                      <a
-                        href={d.archivo_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        onClick={() => setShowVoucherModal(d)}
                         style={{
                           color: '#0369a1',
-                          textDecoration: 'none',
+                          background: 'transparent',
+                          border: 'none',
+                          textDecoration: 'underline',
+                          cursor: 'pointer',
                           fontSize: '0.85rem',
                           fontWeight: '600'
                         }}
                       >
                         {d.voucher_is_pdf || d.archivo_url.toLowerCase().includes('.pdf') ? '📄 Ver PDF' : '🖼️ Ver Imagen'}
-                      </a>
+                      </button>
                     ) : (
                       <span style={{ color: '#999', fontSize: '0.85rem' }}>Sin archivo</span>
                     )}
@@ -170,30 +259,47 @@ export default function DepositosTab({ user }) {
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                       {d.estado !== 'aprobado' && d.estado !== 'eliminado' && (
                         <>
-                          <button 
-                            onClick={() => approve(d.id, true)} 
-                            disabled={approving === d.id}
-                            style={{ 
-                              background: approving === d.id ? '#ccc' : 'var(--success-color)',
-                              color: '#fff',
-                              padding: '6px 12px',
-                              fontSize: '0.85rem'
-                            }}
-                          >
-                            {approving === d.id ? '⏳' : '✓ Aprobar'}
-                          </button>
-                          <button 
-                            onClick={() => approve(d.id, false)} 
-                            disabled={approving === d.id}
-                            style={{ 
-                              background: approving === d.id ? '#ccc' : 'var(--danger-color)',
-                              color: '#fff',
-                              padding: '6px 12px',
-                              fontSize: '0.85rem'
-                            }}
-                          >
-                            {approving === d.id ? '⏳' : '✗ Rechazar'}
-                          </button>
+                          {(d.tipo === 'plazo_fijo' || d.tipo === 'certificado') ? (
+                            <button 
+                              onClick={() => openApproveModal(d)}
+                              disabled={approving === d.id}
+                              style={{ 
+                                background: approving === d.id ? '#ccc' : 'var(--success-color)',
+                                color: '#fff',
+                                padding: '6px 12px',
+                                fontSize: '0.85rem'
+                              }}
+                            >
+                              {approving === d.id ? '⏳' : '✓ Revisar'}
+                            </button>
+                          ) : (
+                            <>
+                              <button 
+                                onClick={() => approve(d.id, true)} 
+                                disabled={approving === d.id}
+                                style={{ 
+                                  background: approving === d.id ? '#ccc' : 'var(--success-color)',
+                                  color: '#fff',
+                                  padding: '6px 12px',
+                                  fontSize: '0.85rem'
+                                }}
+                              >
+                                {approving === d.id ? '⏳' : '✓ Aprobar'}
+                              </button>
+                              <button 
+                                onClick={() => approve(d.id, false)} 
+                                disabled={approving === d.id}
+                                style={{ 
+                                  background: approving === d.id ? '#ccc' : 'var(--danger-color)',
+                                  color: '#fff',
+                                  padding: '6px 12px',
+                                  fontSize: '0.85rem'
+                                }}
+                              >
+                                {approving === d.id ? '⏳' : '✗ Rechazar'}
+                              </button>
+                            </>
+                          )}
                         </>
                       )}
                       {d.estado !== 'eliminado' && (
@@ -288,6 +394,208 @@ export default function DepositosTab({ user }) {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal de Aprobación de Depósito (Plazo Fijo / Certificado) */}
+      {showApproveModal && (
+        <div className="modal-overlay" onClick={() => setShowApproveModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3>Aprobar {showApproveModal.tipo === 'plazo_fijo' ? 'Plazo Fijo' : 'Certificado'}</h3>
+
+            <div style={{ background: '#f5f5f5', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
+              <p><strong>Usuario:</strong> {showApproveModal.id_usuario}</p>
+              <p><strong>Monto:</strong> {formatCurrency(showApproveModal.monto)}</p>
+              <p><strong>Tipo:</strong> {showApproveModal.tipo}</p>
+              <p><strong>Fecha:</strong> {formatDate(showApproveModal.fecha_deposito)}</p>
+            </div>
+
+            {/* Interés % */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                📊 Interés Anual (%) *
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={approveForm.interes}
+                onChange={(e) => setApproveForm(prev => ({ ...prev, interes: e.target.value }))}
+                style={{ width: '100%', padding: '10px', fontSize: '16px', borderRadius: '6px', border: '2px solid #e0e0e0' }}
+                placeholder="Ej: 5.0"
+              />
+              <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                Interés que se aplicará al {showApproveModal.tipo === 'plazo_fijo' ? 'plazo fijo' : 'certificado'}
+              </small>
+            </div>
+
+            {/* Upload PDF */}
+            <div style={{ marginBottom: '16px', padding: '16px', background: '#fff3cd', borderRadius: '8px', border: '2px solid #ffc107' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#856404' }}>
+                📄 Documento del {showApproveModal.tipo === 'plazo_fijo' ? 'Plazo Fijo' : 'Certificado'} (PDF) *Obligatorio
+              </label>
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={(e) => setApproveForm(prev => ({ ...prev, pdfFile: e.target.files[0] }))}
+                style={{ marginBottom: '8px', display: 'block', width: '100%' }}
+                disabled={approveForm.uploadingPdf}
+              />
+              <button
+                onClick={uploadPdf}
+                disabled={!approveForm.pdfFile || approveForm.uploadingPdf}
+                style={{
+                  background: approveForm.uploadingPdf ? '#ccc' : '#007bff',
+                  color: '#fff',
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: approveForm.uploadingPdf || !approveForm.pdfFile ? 'not-allowed' : 'pointer',
+                  fontSize: '0.9rem',
+                  marginTop: '8px'
+                }}
+              >
+                {approveForm.uploadingPdf ? '⏳ Subiendo...' : '⬆️ Subir PDF'}
+              </button>
+              {approveForm.pdfUrl && (
+                <div style={{ marginTop: '8px', color: '#28a745', fontWeight: '600' }}>
+                  ✅ PDF subido correctamente
+                  <a href={approveForm.pdfUrl} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px', color: '#007bff' }}>
+                    Ver
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* Observaciones */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                📝 Observaciones (opcional)
+              </label>
+              <textarea
+                value={approveForm.observaciones}
+                onChange={(e) => setApproveForm(prev => ({ ...prev, observaciones: e.target.value }))}
+                style={{ width: '100%', padding: '10px', fontSize: '14px', borderRadius: '6px', border: '2px solid #e0e0e0', minHeight: '80px' }}
+                placeholder="Comentarios adicionales..."
+              />
+            </div>
+
+            {/* Botones */}
+            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+              <button
+                onClick={() => approveWithModal(true)}
+                disabled={approving || !approveForm.pdfUrl || !approveForm.interes}
+                style={{
+                  flex: 1,
+                  background: approving || !approveForm.pdfUrl || !approveForm.interes ? '#ccc' : '#28a745',
+                  color: '#fff',
+                  padding: '12px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: approving || !approveForm.pdfUrl || !approveForm.interes ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: '600'
+                }}
+              >
+                {approving ? '⏳ Procesando...' : '✅ Aprobar'}
+              </button>
+              <button
+                onClick={() => approveWithModal(false)}
+                disabled={approving}
+                style={{
+                  flex: 1,
+                  background: approving ? '#ccc' : '#dc3545',
+                  color: '#fff',
+                  padding: '12px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: approving ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: '600'
+                }}
+              >
+                {approving ? '⏳' : '❌ Rechazar'}
+              </button>
+              <button
+                onClick={() => setShowApproveModal(null)}
+                disabled={approving}
+                style={{
+                  background: '#6c757d',
+                  color: '#fff',
+                  padding: '12px 20px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: approving ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem'
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Visualización de Voucher */}
+      {showVoucherModal && (
+        <div className="modal-overlay" onClick={() => setShowVoucherModal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '900px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3>Voucher de Depósito</h3>
+            
+            <div style={{ background: '#f5f5f5', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
+              <p><strong>Usuario:</strong> {showVoucherModal.id_usuario}</p>
+              <p><strong>Tipo:</strong> {showVoucherModal.tipo}</p>
+              <p><strong>Monto:</strong> {formatCurrency(showVoucherModal.monto)}</p>
+              <p><strong>Fecha:</strong> {formatDate(showVoucherModal.fecha_deposito)}</p>
+            </div>
+
+            <div style={{ marginBottom: '16px', textAlign: 'center' }}>
+              {showVoucherModal.voucher_is_pdf || showVoucherModal.archivo_url?.toLowerCase().includes('.pdf') ? (
+                <iframe
+                  src={showVoucherModal.archivo_url}
+                  style={{ width: '100%', height: '600px', border: '1px solid #e0e0e0', borderRadius: '8px' }}
+                  title="Voucher PDF"
+                />
+              ) : (
+                <img
+                  src={showVoucherModal.archivo_url}
+                  alt="Voucher"
+                  style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e0e0e0' }}
+                />
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <a
+                href={showVoucherModal.archivo_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  background: '#007bff',
+                  color: '#fff',
+                  padding: '10px 20px',
+                  borderRadius: '6px',
+                  textDecoration: 'none',
+                  fontSize: '1rem'
+                }}
+              >
+                🔗 Abrir en Nueva Pestaña
+              </a>
+              <button
+                onClick={() => setShowVoucherModal(null)}
+                style={{
+                  background: '#6c757d',
+                  color: '#fff',
+                  padding: '10px 20px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '1rem'
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

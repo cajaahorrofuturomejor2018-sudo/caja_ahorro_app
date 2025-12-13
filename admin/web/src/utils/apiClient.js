@@ -99,8 +99,11 @@ export async function fetchPendingDeposits() {
 /**
  * Approve or reject a deposit
  */
-export async function approveDeposit(depositId, approve = true, observaciones = '') {
-  return apiPost(`/deposits/${depositId}/approve`, { approve, observaciones });
+export async function approveDeposit(depositId, approve = true, observaciones = '', interes = null, documento_url = null) {
+  const payload = { approve, observaciones };
+  if (interes !== null) payload.interes = interes;
+  if (documento_url !== null) payload.documento_url = documento_url;
+  return apiPost(`/deposits/${depositId}/approve`, payload);
 }
 
 /**

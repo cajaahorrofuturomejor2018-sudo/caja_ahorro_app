@@ -392,7 +392,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   const depositId = req.params.id;
   const adminUid = req.user.uid;
-  const { approve = true, observaciones = '', detalleOverride = null, multasPorUsuario = null } = req.body || {};
+  const { approve = true, observaciones = '', detalleOverride = null, multasPorUsuario = null, interes = null, documento_url = null } = req.body || {};
   try {
     const db = admin.firestore();
 
@@ -539,6 +539,37 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       }
 
       const multaMonto = computePenalty(depData, config);
+
+      // 🔴 Validar que plazos fijos y certificados tengan PDF e interés antes de aprobar
+      // Nota: depTipo ya fue declarado arriba para el manejo de multas
+      if (approve && (depTipo === 'plazo_fijo' || depTipo === 'certificado')) {
+        if (!documento_url && !depData?.documento_url) {
+          throw new Error('Debe cargar el documento PDF antes de aprobar un ' + depTipo);
+        }
+        if (!interes && !depData?.interes_porcentaje) {
+          throw new Error('Debe ingresar el interés % antes de aprobar un ' + depTipo);
+        }
+      }
+
+      // Construir objeto de actualización del depósito
+      const updateData = {
+        validado: true,
+        estado: 'aprobado',
+        id_admin: adminUid,
+        observaciones: observaciones || '',
+        fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // Agregar interés y documento para plazos fijos y certificados
+      if ((depTipo === 'plazo_fijo' || depTipo === 'certificado') && interes) {
+        updateData.interes_porcentaje = parseFloat(interes);
+      }
+      if ((depTipo === 'plazo_fijo' || depTipo === 'certificado') && documento_url) {
+        updateData.documento_url = documento_url;
+      }
+
+      // Actualizar el depósito con los datos
+      tx.update(depRef, updateData);
 
       let detalle = detalleOverride || parseDetalle(depData?.detalle_por_usuario);
       let montoSobrante = 0.0;
