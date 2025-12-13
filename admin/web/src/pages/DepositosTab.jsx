@@ -19,6 +19,7 @@ export default function DepositosTab({ user }) {
     pdfUrl: ''
   });
   const [showVoucherModal, setShowVoucherModal] = useState(null);
+  const [downloadingReport, setDownloadingReport] = useState(false);
 
   useEffect(() => {
     if (user?.token) {
@@ -45,6 +46,32 @@ export default function DepositosTab({ user }) {
       setError(result.error);
     }
     setLoading(false);
+  }
+
+  async function downloadReporteUsuarios() {
+    try {
+      setDownloadingReport(true);
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+      const resp = await fetch(`${base}/api/reportes/usuarios`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      if (!resp.ok) throw new Error('Error generando reporte');
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'reporte_usuarios.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setSuccess('Reporte descargado');
+      setTimeout(() => setSuccess(null), 2500);
+    } catch (e) {
+      setError(e.message || 'Error al descargar el reporte');
+    } finally {
+      setDownloadingReport(false);
+    }
   }
 
   function openApproveModal(deposito) {
@@ -325,6 +352,12 @@ export default function DepositosTab({ user }) {
         </div>
       )}
 
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+        <button onClick={downloadReporteUsuarios} disabled={downloadingReport} style={{ background: downloadingReport ? '#ccc' : '#0ea5e9', color: '#fff', padding: '8px 12px', borderRadius: '6px', border: 'none', cursor: downloadingReport ? 'not-allowed' : 'pointer' }}>
+          {downloadingReport ? 'Generando...' : '📄 Exportar Reporte PDF'}
+        </button>
+      </div>
 
       {showNew && (
         <div className="modal-overlay" onClick={() => setShowNew(false)}>

@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
+const PdfPrinter = require('pdfmake');
 
 const app = express();
 app.use(cors());
@@ -205,6 +206,120 @@ app.get('/api/movimientos', verifyToken, async (req, res) => {
     res.json(items);
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
+
+// Reporte: Usuarios y saldos en PDF
+app.get('/api/reportes/usuarios', verifyToken, async (req, res) => {
+  if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
+  try {
+    const db = admin.firestore();
+    const usuariosSnap = await db.collection('usuarios').get();
+
+    // Obtener última fecha de depósito por usuario
+    const depositosSnap = await db.collection('depositos').orderBy('fecha_deposito', 'desc').get();
+    const ultimaFechaPorUsuario = {};
+    for (const d of depositosSnap.docs) {
+      const u = d.data()?.id_usuario;
+      const ts = d.data()?.fecha_deposito || d.data()?.fecha_registro;
+      if (!u) continue;
+      if (!ultimaFechaPorUsuario[u] && ts) {
+        try {
+          ultimaFechaPorUsuario[u] = ts.toDate ? ts.toDate() : new Date(ts);
+        } catch { ultimaFechaPorUsuario[u] = null; }
+      }
+    }
+
+    const rows = [];
+    usuariosSnap.docs.forEach(doc => {
+      const u = doc.data();
+      const nombre = `${u.nombre || ''} ${u.apellido || ''}`.trim() || (u.displayName || '—');
+      const correo = u.email || u.correo || '—';
+      const ahorros = parseFloat(u.total_ahorros || 0);
+      const plazos = parseFloat(u.total_plazos_fijos || 0);
+      const certificados = parseFloat(u.total_certificados || 0);
+      const prestamos = parseFloat(u.total_prestamos || 0);
+      const multas = parseFloat(u.total_multas || 0);
+      const saldo = ahorros + plazos + certificados - prestamos;
+      const fechaUlt = ultimaFechaPorUsuario[doc.id] ? new Date(ultimaFechaPorUsuario[doc.id]) : null;
+      const fechaStr = fechaUlt ? fechaUlt.toLocaleDateString('es-EC') : '—';
+      rows.push([nombre, correo, formatCurrencyLocal(saldo), formatCurrencyLocal(ahorros), formatCurrencyLocal(plazos), formatCurrencyLocal(certificados), formatCurrencyLocal(multas), fechaStr]);
+    });
+
+    const fonts = { Roboto: { normal: Buffer.from([]), bold: Buffer.from([]), italics: Buffer.from([]), bolditalics: Buffer.from([]) } };
+    const printer = new PdfPrinter(fonts);
+    const now = new Date();
+    const docDefinition = {
+      pageSize: 'A4',
+      pageMargins: [28, 40, 28, 40],
+      content: [
+        { text: 'CAJA DE AHORRO', style: 'header', alignment: 'center' },
+        { text: 'Reporte de Usuarios y Saldos', style: 'subheader', alignment: 'center' },
+        { text: `Generado: ${now.toLocaleString('es-EC')}`, style: 'date', alignment: 'center' },
+        { text: '\n' },
+        {
+          table: {
+            headerRows: 1,
+            widths: ['15%', '20%', '10%', '10%', '12%', '12%', '10%', '11%'],
+            body: [
+              [
+                { text: 'Usuario', style: 'tableHeader' },
+                { text: 'Correo', style: 'tableHeader' },
+                { text: 'Saldo Total', style: 'tableHeader' },
+                { text: 'Ahorros', style: 'tableHeader' },
+                { text: 'Plazo Fijo', style: 'tableHeader' },
+                { text: 'Certificados', style: 'tableHeader' },
+                { text: 'Multas', style: 'tableHeader' },
+                { text: 'Últ. Depósito', style: 'tableHeader' }
+              ],
+              ...rows.map(r => r.map(cell => ({ text: cell, style: 'tableBody' })))
+            ]
+          },
+          layout: {
+            fillColor: (rowIndex) => rowIndex === 0 ? '#0ea5e9' : (rowIndex % 2 === 0 ? '#f0f9ff' : '#fff'),
+            hLineWidth: (i, node) => i === 0 || i === node.table.body.length ? 2 : 0.5,
+            vLineWidth: () => 0.5,
+            hLineColor: () => '#cbd5e1',
+            vLineColor: () => '#cbd5e1',
+            paddingLeft: () => 6,
+            paddingRight: () => 6,
+            paddingTop: () => 8,
+            paddingBottom: () => 8
+          }
+        }
+      ],
+      styles: {
+        header: { fontSize: 18, bold: true, color: '#0ea5e9', marginBottom: 4 },
+        subheader: { fontSize: 12, color: '#64748b', marginBottom: 2 },
+        date: { fontSize: 9, color: '#94a3b8', marginBottom: 12 },
+        tableHeader: { fontSize: 10, bold: true, color: '#fff', alignment: 'center' },
+        tableBody: { fontSize: 9, alignment: 'left' }
+      },
+      footer: (currentPage, pageCount) => ({
+        columns: [
+          { text: `Página ${currentPage} de ${pageCount}`, alignment: 'center', fontSize: 8, color: '#94a3b8' }
+        ],
+        margin: [28, 10]
+      })
+    };
+
+    const pdfDoc = printer.createPdfKitDocument(docDefinition);
+    const chunks = [];
+    pdfDoc.on('data', (d) => chunks.push(d));
+    pdfDoc.on('end', () => {
+      const result = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="reporte_usuarios.pdf"');
+      res.send(result);
+    });
+    pdfDoc.end();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || e.toString() });
+  }
+});
+
+function formatCurrencyLocal(n) {
+  try { return new Intl.NumberFormat('es-EC', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n || 0); } catch { return `$${(n||0).toFixed(2)}`; }
+}
 
 // Pending deposits (validations queue)
 app.get('/api/deposits/pending', verifyToken, async (req, res) => {
@@ -423,24 +538,21 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       try {
         const enforceDate = (config?.enforce_voucher_date) ?? false;
         if (!enforceDate) return 0.0;
-        const detected = depData?.fecha_deposito_detectada;
-        const dueRaw = (config?.due_schedule_json) || (config?.due_schedule);
-        const grace = (config?.grace_days) ?? 0;
+        const detected = depData?.fecha_deposito_detectada; // fecha efectiva del pago (voucher)
+        const dueRaw = (config?.due_schedule_json) || (config?.due_schedule); // fecha límite del ahorro/prestamo
+        const grace = (config?.grace_days) ?? 0; // días de gracia
         if (!detected || !dueRaw) return 0.0;
         const tryParse = (raw) => {
           if (!raw) return null;
           const s = raw.toString();
-          // Attempt ISO parse
           const d = new Date(s);
           if (!isNaN(d.getTime())) return d;
-          // try dd/MM/yyyy and dd-MM-yyyy
           const sep = s.includes('/') ? '/' : (s.includes('-') ? '-' : null);
           if (!sep) return null;
           const parts = s.split(sep).map(p => parseInt(p.replace(/[^0-9]/g,''),10));
           if (parts.length < 3) return null;
           let day = parts[0], month = parts[1], year = parts[2];
           if (year < 100) year += 2000;
-          // if first part > 31 likely yyyy-mm-dd
           if (parts[0] > 31) { year = parts[0]; month = parts[1]; day = parts[2]; }
           return new Date(year, month - 1, day);
         }
@@ -458,15 +570,19 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         if (!detectedDate || !dueDate) return 0.0;
         const cutoff = new Date(dueDate.getTime());
         cutoff.setDate(cutoff.getDate() + (grace ?? 0));
-        if (detectedDate > cutoff) {
-          const pen = config?.penalty || {};
-          const pType = pen?.type || 'percent';
-          const pVal = parseFloat(pen?.value || 0);
-          const monto = parseFloat(depData?.monto || 0);
-          if (pType === 'percent') return (monto * pVal / 100.0);
-          return pVal;
-        }
-        return 0.0;
+        if (detectedDate <= cutoff) return 0.0;
+        // Días de atraso desde el cutoff hasta la fecha de pago
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const daysLate = Math.floor((detectedDate.getTime() - cutoff.getTime()) / msPerDay);
+        if (daysLate <= 0) return 0.0;
+        const pen = config?.penalty || {};
+        // Nuevos tipos: per_day_percent, per_day_fixed (default: per_day_fixed)
+        const pType = pen?.type || 'per_day_fixed';
+        const pVal = parseFloat(pen?.value || 0);
+        const monto = parseFloat(depData?.monto || 0);
+        if (pType === 'per_day_percent') return daysLate * (monto * pVal / 100.0);
+        // per_day_fixed
+        return daysLate * pVal;
       } catch (e) {
         return 0.0;
       }
@@ -663,6 +779,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           });
         }
       } else {
+        let multasSum = 0.0;
         for (const part of detalle) {
           const idUsuario = part?.id_usuario;
           const monto = parseFloat(part?.monto || 0);
@@ -671,6 +788,11 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           if (!userSnap || !userSnap.exists) continue;
           const userData = userSnap.data();
           const partTipo = part?.tipo || depData?.tipo || 'ahorro';
+          // Si el detalle es multa, NO sumar al total del usuario; acumular para caja
+          if (partTipo === 'multa') {
+            multasSum += monto;
+            continue;
+          }
           function fieldForTipo(tipo) {
             switch (tipo) {
               case 'plazo_fijo': return 'total_plazos_fijos';
@@ -701,8 +823,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         const montoTotalDep = parseFloat(depData?.monto || 0);
         tx.update(cajaRefDep2, { saldo: saldoCajaDep2 + montoTotalDep });
 
-        // Acumular multas para enviar a la caja y registrar movimientos
-        let multasSum = 0.0;
+        // Acumular multas (del detalle y/o multasPorUsuario) para enviar a la caja y registrar movimientos
         if (multasPorUsuario) {
           for (const uid of Object.keys(multasPorUsuario)) {
             const multa = parseFloat(multasPorUsuario[uid] || 0);
