@@ -1,0 +1,108 @@
+name: Build and Release APK
+
+on:
+  push:
+    branches:
+      - main
+      - fix/deposito-reparto
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Build App Bundle
+        run: flutter build appbundle --release
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          VERSION=$(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_number }}
+          release_name: Release v${{ steps.version.outputs.version }} (Build ${{ github.run_number }})
+          body: |
+            ## 📱 Caja de Ahorros App - Release ${{ steps.version.outputs.version }}
+            
+            ### 🚀 Instalación
+            1. Descarga el archivo `app-release.apk`
+            2. Habilita "Instalar desde orígenes desconocidos" en tu dispositivo Android
+            3. Abre el archivo APK e instala
+            
+            ### 📋 Cambios en esta versión
+            - Commit: ${{ github.sha }}
+            - Branch: ${{ github.ref_name }}
+            
+            ### 📦 Archivos incluidos
+            - **app-release.apk**: APK listo para instalar
+            - **app-release.aab**: App Bundle para Google Play Store
+            
+            ---
+            Generado automáticamente el ${{ github.event.head_commit.timestamp }}
+          draft: false
+          prerelease: false
+
+      - name: Upload APK to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./build/app/outputs/flutter-apk/app-release.apk
+          asset_name: caja-ahorros-v${{ steps.version.outputs.version }}-build${{ github.run_number }}.apk
+          asset_content_type: application/vnd.android.package-archive
+
+      - name: Upload App Bundle to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./build/app/outputs/bundle/release/app-release.aab
+          asset_name: caja-ahorros-v${{ steps.version.outputs.version }}-build${{ github.run_number }}.aab
+          asset_content_type: application/octet-stream
+
+      - name: Upload APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30

@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  admin-api:
+    build: ./admin/api
+    ports:
+      - 8080:8080
+    environment:
+      - PORT=8080
+      - SERVICE_ACCOUNT_PATH=/run/secrets/serviceAccountKey.json
+    volumes:
+      - ./admin/api:/app
+      # optionally mount your local service account for admin operations
+      - ./scripts/serviceAccountKey.json:/run/secrets/serviceAccountKey.json:ro
+    restart: unless-stopped
+
+  admin-web:
+    build:
+      context: ./admin/web
+      args:
+        API_URL: "http://admin-api:8080"
+    ports:
+      - 8083:80
+    depends_on:
+      - admin-api
+    environment:
+      - API_URL=http://admin-api:8080
+    restart: unless-stopped
+
+  app-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - 8082:80
+    depends_on: []
+    restart: unless-stopped

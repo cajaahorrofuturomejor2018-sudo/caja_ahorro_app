@@ -1,0 +1,18 @@
+// TEMPORAL - Parche de emergencia (DESPLEGAR SOLO TEMPORALMENTE)
+// WARNING: Estas reglas son intencionadamente permisivas para usuarios autenticados
+// y deben ser reemplazadas por la política segura que usa custom claims tan pronto
+// como sea posible. Objetivo: restaurar acceso admin inmediato mientras se asignan
+// los claims con Admin SDK.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Permitir lectura y escritura a usuarios autenticados.
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    match /{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
