@@ -663,27 +663,37 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       const numMeses = Math.floor(monto / MONTHLY_AMOUNT);
       const sobrante = monto - (numMeses * MONTHLY_AMOUNT);
 
-      // Determinar el mes de inicio (basado en fecha de depósito o config)
+      // Determinar el mes de inicio (basado en fecha de depósito)
       const depositDate = new Date(fechaDeposito || new Date());
       const currentMonth = depositDate.getMonth(); // 0-11
       const currentYear = depositDate.getFullYear();
 
-      // Crear el detalle de reparto mensual
+      // Crear el detalle de reparto mensual (retrocediendo desde el mes actual)
       const detalle = [];
       for (let i = 0; i < numMeses; i++) {
-        const monthIndex = (currentMonth - (numMeses - 1) + i + 12) % 12;
-        const mes = monthNames[monthIndex];
+        // Calcular mes y año correctamente incluso al cruzar años
+        const monthOffset = numMeses - 1 - i; // Cuántos meses retroceder
+        let targetMonth = currentMonth - monthOffset;
+        let targetYear = currentYear;
+        
+        // Ajustar año si retrocedemos más allá de enero
+        while (targetMonth < 0) {
+          targetMonth += 12;
+          targetYear -= 1;
+        }
+        
+        const mes = monthNames[targetMonth];
         detalle.push({
           mes,
           monto: MONTHLY_AMOUNT,
-          año: currentYear
+          año: targetYear
         });
       }
 
       return {
         detalle,
         mesesCubiertos: numMeses,
-        sobrante, // Si hay sobrante, podría ser un crédito o rechazarse
+        sobrante,
         totalRepartido: numMeses * MONTHLY_AMOUNT
       };
     }
