@@ -14,10 +14,10 @@ Las imágenes Docker están disponibles en Docker Hub para deployment rápido:
 
 ```bash
 # Admin API
-docker pull [TU_USERNAME]/caja-ahorro-admin-api:latest
+docker pull rjacebo956/caja-ahorro-admin-api:latest
 
 # Admin Web
-docker pull [TU_USERNAME]/caja-ahorro-admin-web:latest
+docker pull rjacebo956/caja-ahorro-admin-web:latest
 ```
 
 ## 🔧 Deployment con Docker
@@ -164,14 +164,14 @@ docker-compose up -d
 docker login
 
 # Ejecutar script de push
-.\scripts\push-docker-hub.ps1 -DockerHubUsername "TU_USERNAME"
+.\scripts\push-docker-hub.ps1 -DockerHubUsername "rjacebo956"
 ```
 
 ### 3. Pull en servidor de producción:
 
 ```bash
-docker pull [TU_USERNAME]/caja-ahorro-admin-api:latest
-docker pull [TU_USERNAME]/caja-ahorro-admin-web:latest
+docker pull rjacebo956/caja-ahorro-admin-api:latest
+docker pull rjacebo956/caja-ahorro-admin-web:latest
 
 docker-compose down
 docker-compose up -d
