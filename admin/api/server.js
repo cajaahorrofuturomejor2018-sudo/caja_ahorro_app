@@ -642,6 +642,52 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       }
     }
 
+    /**
+     * Reparte automáticamente un monto en cuotas mensuales de $25
+     * Para ahorros mensuales, cada $25 representa un mes de aporte
+     * Ejemplo: $75 = 3 meses (enero, febrero, marzo)
+     */
+    function splitMonthlyDeposit(monto, fechaDeposito, config) {
+      const MONTHLY_AMOUNT = 25.0;
+      const monthNames = [
+        'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+        'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+      ];
+
+      // Si el monto es menor a $25, no hay reparto
+      if (monto < MONTHLY_AMOUNT) {
+        return null; // Indica que no se puede repartir (depósito inválido o parcial)
+      }
+
+      // Calcular cuántos meses completos cubre el depósito
+      const numMeses = Math.floor(monto / MONTHLY_AMOUNT);
+      const sobrante = monto - (numMeses * MONTHLY_AMOUNT);
+
+      // Determinar el mes de inicio (basado en fecha de depósito o config)
+      const depositDate = new Date(fechaDeposito || new Date());
+      const currentMonth = depositDate.getMonth(); // 0-11
+      const currentYear = depositDate.getFullYear();
+
+      // Crear el detalle de reparto mensual
+      const detalle = [];
+      for (let i = 0; i < numMeses; i++) {
+        const monthIndex = (currentMonth - (numMeses - 1) + i + 12) % 12;
+        const mes = monthNames[monthIndex];
+        detalle.push({
+          mes,
+          monto: MONTHLY_AMOUNT,
+          año: currentYear
+        });
+      }
+
+      return {
+        detalle,
+        mesesCubiertos: numMeses,
+        sobrante, // Si hay sobrante, podría ser un crédito o rechazarse
+        totalRepartido: numMeses * MONTHLY_AMOUNT
+      };
+    }
+
       // Transactional approve logic
     await db.runTransaction(async (tx) => {
       const depRef = db.collection('depositos').doc(depositId);
@@ -784,37 +830,65 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         if (!userSnap || !userSnap.exists) throw new Error('Usuario del depósito no encontrado');
         const userData = userSnap.data();
         const depTipo = depData?.tipo || 'ahorro';
-        function fieldForTipo(tipo) {
-          switch (tipo) {
-            case 'plazo_fijo': return 'total_plazos_fijos';
-            case 'certificado': return 'total_certificados';
-            case 'pago_prestamo': return 'total_prestamos';
-            case 'ahorro':
-            default: return 'total_ahorros';
+
+        // 🚀 AUTO-REPARTO MENSUAL: Si el monto es ≥ $25 y es tipo "ahorro", repartir automáticamente
+        if (depTipo === 'ahorro' && monto >= 25) {
+          const repartoResult = splitMonthlyDeposit(monto, depData?.fecha_deposito_detectada, config);
+          if (repartoResult && repartoResult.detalle) {
+            // Convertir el reparto a formato detalle estándar
+            detalle = repartoResult.detalle.map(item => ({
+              id_usuario: idUsuario,
+              monto: item.monto,
+              mes: item.mes,
+              año: item.año
+            }));
+            
+            // Guardar el reparto en el depósito para auditoría
+            tx.update(depRef, {
+              detalle_auto_generado: true,
+              detalle_por_usuario: JSON.stringify(detalle),
+              meses_cubiertos: repartoResult.mesesCubiertos,
+              sobrante: repartoResult.sobrante
+            });
+
+            console.log(`✅ Auto-reparto mensual generado: ${repartoResult.mesesCubiertos} meses, sobrante: $${repartoResult.sobrante}`);
           }
         }
-        const targetField = fieldForTipo(depTipo);
-        // Descontar la multa del monto acreditado al usuario
-        const montoMulta = parseFloat(multaMonto || 0);
-        const montoUsuarioNeto = Math.max(0, monto - montoMulta);
-        const current = (userData[targetField] || 0) + montoUsuarioNeto;
-        tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
-        tx.set(db.collection('movimientos').doc(), {
-          id_usuario: idUsuario,
-          tipo: depTipo || 'deposito',
-          referencia_id: depositId,
-          monto: montoUsuarioNeto,
-          fecha: admin.firestore.FieldValue.serverTimestamp(),
-          descripcion: depData?.descripcion || 'Depósito aprobado',
-          registrado_por: adminUid,
-        });
-        // Actualizar caja solo con el valor de la multa descontada
-        if (montoMulta > 0) {
-          const cajaRefDep = db.collection('caja').doc('estado');
-          const cajaSnapDep = await tx.get(cajaRefDep);
-          let saldoCajaDep = 0.0;
-          if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
-          tx.update(cajaRefDep, { saldo: saldoCajaDep + montoMulta });
+
+        // Si después del auto-reparto NO hay detalle (depósito < $25 o no es ahorro), usar lógica simple
+        if (!detalle || detalle.length === 0) {
+          function fieldForTipo(tipo) {
+            switch (tipo) {
+              case 'plazo_fijo': return 'total_plazos_fijos';
+              case 'certificado': return 'total_certificados';
+              case 'pago_prestamo': return 'total_prestamos';
+              case 'ahorro':
+              default: return 'total_ahorros';
+            }
+          }
+          const targetField = fieldForTipo(depTipo);
+          // Descontar la multa del monto acreditado al usuario
+          const montoMulta = parseFloat(multaMonto || 0);
+          const montoUsuarioNeto = Math.max(0, monto - montoMulta);
+          const current = (userData[targetField] || 0) + montoUsuarioNeto;
+          tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
+          tx.set(db.collection('movimientos').doc(), {
+            id_usuario: idUsuario,
+            tipo: depTipo || 'deposito',
+            referencia_id: depositId,
+            monto: montoUsuarioNeto,
+            fecha: admin.firestore.FieldValue.serverTimestamp(),
+            descripcion: depData?.descripcion || 'Depósito aprobado',
+            registrado_por: adminUid,
+          });
+          // Actualizar caja solo con el valor de la multa descontada
+          if (montoMulta > 0) {
+            const cajaRefDep = db.collection('caja').doc('estado');
+            const cajaSnapDep = await tx.get(cajaRefDep);
+            let saldoCajaDep = 0.0;
+            if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
+            tx.update(cajaRefDep, { saldo: saldoCajaDep + montoMulta });
+          }
         }
 
         if (multaMonto > 0) {
