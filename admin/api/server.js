@@ -1365,8 +1365,6 @@ app.post('/api/prestamos/:id/approve', verifyToken, async (req, res) => {
         const currentPrestamos = parseFloat(usuarioData.total_prestamos || 0);
         tx.update(usuarioRef, { total_prestamos: currentPrestamos + finalMonto });
       }
-      // Actualizar caja: desembolso reduce saldo
-      tx.update(cajaRef, { saldo: cajaSaldoActual - finalMonto });
     });
     // Optionally, notify the user
     try {
