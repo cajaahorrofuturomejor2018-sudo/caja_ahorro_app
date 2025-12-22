@@ -44,7 +44,8 @@ Ampliar documento de usuario (`usuarios/{uid}`) con:
 
 ## Corte de Caja y Depósitos Adelantados
 - Snapshot al `2025-12-31T23:59:59Z`: capturar por usuario `saldo_corte_2025`.
-- En 2026, cualquier saldo por encima del corte se considera **adelantado** y se suma a `avance_anual_2026` (hasta cubrir `objetivo_anual_2026`).
+- Cálculo de carry-over: `carryover_2025_a_2026 = max(0, saldo_corte_2025 - objetivo_anual_2025)`.
+- En 2026, el avance inicial se fija como `avance_anual_2026 = min(carryover_2025_a_2026, objetivo_anual_2026)`.
 - Los depósitos que exceden los objetivos mensuales se registran como **adelantados** y se exime multa subsiguiente mientras se mantenga el plan.
 
 ## Endpoints/Comandos a Implementar (backend `admin/api/server.js`)

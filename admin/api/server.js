@@ -314,7 +314,19 @@ app.post('/api/admin/inicializar-corte-2025', verifyToken, async (req, res) => {
           sumaDepositosHastaCorte += parseFloat(m.monto || 0);
         }
       }
-      await db.collection('usuarios').doc(uid).set({ saldo_corte_2025: sumaDepositosHastaCorte, avance_anual_2026: 0 }, { merge: true });
+      const udata = doc.data() || {};
+      // Objetivo anual 2025 basado en categoría (usa parámetros 2026 como referencia si no hay específicos para 2025)
+      const objetivoAnual2025 = objetivoAnualForUser(udata, params);
+      const carryOver = Math.max(0, sumaDepositosHastaCorte - parseFloat(objetivoAnual2025 || 0));
+      const objetivoAnual2026 = objetivoAnualForUser(udata, params);
+      // Avance inicial 2026 parte con carryOver (limitado al objetivo anual)
+      const avanceInicial2026 = Math.min(carryOver, parseFloat(objetivoAnual2026 || 0));
+      await db.collection('usuarios').doc(uid).set({ 
+        saldo_corte_2025: sumaDepositosHastaCorte,
+        carryover_2025_a_2026: carryOver,
+        avance_anual_2026: avanceInicial2026,
+        objetivo_anual_2026: objetivoAnual2026
+      }, { merge: true });
       processed++;
     }
     res.json({ ok: true, usuarios_procesados: processed });
