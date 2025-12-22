@@ -2,6 +2,7 @@ const express = require('express');
 const admin = require('firebase-admin');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const multer = require('multer');
 const PdfPrinter = require('pdfmake');
 
@@ -80,6 +81,68 @@ async function verifyToken(req, res, next) {
 app.get('/', (req, res) => res.json({ ok: true }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Parámetros de operación (2026): carga desde archivo para lógica de categorías/aportes/multas
+function loadParametros2026() {
+  try {
+    const p = path.join(__dirname, 'config', 'parametros_2026.json');
+    const raw = fs.readFileSync(p, 'utf8');
+    const cfg = JSON.parse(raw);
+    return cfg;
+  } catch (e) {
+    return {
+      anio: 2026,
+      aporte_mensual_base: 25,
+      dia_limite_mensual: 10,
+      reglas: {
+        exencion_multa_si_avance_mes_cumplido: true,
+        exencion_multa_si_adelantado: true,
+      },
+      categorias: []
+    };
+  }
+}
+
+function aporteMensualForUser(userData, parametros) {
+  try {
+    const cats = Array.isArray(parametros?.categorias) ? parametros.categorias : [];
+    const catName = (userData?.categoria || '').toString();
+    const found = cats.find(c => (c?.nombre || '') === catName);
+    if (found && typeof found.aporte_mensual === 'number') return parseFloat(found.aporte_mensual);
+    return parseFloat(parametros?.aporte_mensual_base || 25);
+  } catch { return 25; }
+}
+
+function objetivoAnualForUser(userData, parametros) {
+  try {
+    const cats = Array.isArray(parametros?.categorias) ? parametros.categorias : [];
+    const catName = (userData?.categoria || '').toString();
+    const found = cats.find(c => (c?.nombre || '') === catName);
+    if (found && typeof found.aporte_anual_objetivo === 'number') return parseFloat(found.aporte_anual_objetivo);
+    const m = aporteMensualForUser(userData, parametros);
+    return m * 12;
+  } catch { return 25 * 12; }
+}
+
+function toJsDate(tsOrDate) {
+  try {
+    if (!tsOrDate) return new Date();
+    if (tsOrDate instanceof Date) return tsOrDate;
+    if (typeof tsOrDate === 'string') { const d = new Date(tsOrDate); return isNaN(d.getTime()) ? new Date() : d; }
+    if (tsOrDate.toDate) return tsOrDate.toDate();
+    return new Date();
+  } catch { return new Date(); }
+}
+
+function getMonthIndex(dateLike) {
+  const d = toJsDate(dateLike);
+  return d.getMonth() + 1; // 1-12
+}
+
+function dayOfMonth(dateLike) {
+  const d = toJsDate(dateLike);
+  return d.getDate();
+}
 
 // Upload file to Firebase Storage
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB max
@@ -190,6 +253,71 @@ app.get('/api/users', verifyToken, async (req, res) => {
     const snap = await db.collection('usuarios').limit(500).get();
     const items = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
     res.json(items);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || e.toString() });
+  }
+});
+
+// Admin: Categorizar socios por fecha de ingreso y fijar objetivo anual 2026
+app.post('/api/admin/categorizar-socios', verifyToken, async (req, res) => {
+  if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
+  try {
+    const db = admin.firestore();
+    const params = loadParametros2026();
+    const fechaFundacion = params?.fecha_fundacion_iso ? new Date(params.fecha_fundacion_iso) : null;
+    const usuariosSnap = await db.collection('usuarios').get();
+    let updated = 0;
+    for (const doc of usuariosSnap.docs) {
+      const udata = doc.data() || {};
+      // Determinar fecha de ingreso
+      const fIngreso = udata.fecha_ingreso_iso ? new Date(udata.fecha_ingreso_iso) : (udata.fecha_registro?.toDate?.() ? udata.fecha_registro.toDate() : null);
+      let categoria = (udata.categoria || '').toString();
+      if (!categoria) {
+        if (fechaFundacion && fIngreso && fIngreso <= fechaFundacion) {
+          categoria = 'fundador';
+        } else {
+          // Si hay rangos configurados, se podrían usar aquí; por defecto 'nuevo'
+          categoria = 'nuevo';
+        }
+      }
+      const objetivoAnual = objetivoAnualForUser({ categoria }, params);
+      await db.collection('usuarios').doc(doc.id).set({ categoria, objetivo_anual_2026: objetivoAnual }, { merge: true });
+      updated++;
+    }
+    res.json({ ok: true, usuarios_actualizados: updated });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || e.toString() });
+  }
+});
+
+// Admin: Inicializar corte de caja 2025 y avance inicial 2026 (snapshot)
+app.post('/api/admin/inicializar-corte-2025', verifyToken, async (req, res) => {
+  if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
+  try {
+    const db = admin.firestore();
+    const params = loadParametros2026();
+    const fechaCorte = params?.fecha_corte_anual_iso ? new Date(params.fecha_corte_anual_iso) : new Date('2025-12-31T23:59:59Z');
+    const usuariosSnap = await db.collection('usuarios').get();
+    let processed = 0;
+    for (const doc of usuariosSnap.docs) {
+      const uid = doc.id;
+      const movSnap = await db.collection('movimientos').where('id_usuario', '==', uid).limit(1000).get();
+      let sumaDepositosHastaCorte = 0.0;
+      for (const mdoc of movSnap.docs) {
+        const m = mdoc.data() || {};
+        const fecha = m.fecha?.toDate?.() ? m.fecha.toDate() : (m.fecha ? new Date(m.fecha) : null);
+        if (!fecha || fecha > fechaCorte) continue;
+        const tipo = (m.tipo || '').toString();
+        if (tipo === 'deposito' || tipo === 'ahorro') {
+          sumaDepositosHastaCorte += parseFloat(m.monto || 0);
+        }
+      }
+      await db.collection('usuarios').doc(uid).set({ saldo_corte_2025: sumaDepositosHastaCorte, avance_anual_2026: 0 }, { merge: true });
+      processed++;
+    }
+    res.json({ ok: true, usuarios_procesados: processed });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message || e.toString() });
@@ -539,6 +667,22 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
       let cajaSaldoAporte = 0.0;
       if (cajaSnapAporte.exists) cajaSaldoAporte = parseFloat(cajaSnapAporte.data().saldo || 0);
       tx.update(cajaRefAporte, { saldo: cajaSaldoAporte + parseFloat(monto) });
+      // 📈 Actualizar avance anual 2026 si el aporte corresponde a ahorro/deposito
+      try {
+        const params2026 = loadParametros2026();
+        const anioCfg = parseInt(params2026?.anio || 2026, 10);
+        const now = new Date();
+        if (now.getFullYear() === anioCfg && (tipo === 'ahorro' || tipo === 'deposito' || !tipo)) {
+          const udata = snap.data() || {};
+          const avanceActual = parseFloat(udata?.avance_anual_2026 || 0);
+          const nuevoAvance = avanceActual + parseFloat(monto || 0);
+          const objetivoAnual = objetivoAnualForUser(udata, params2026);
+          tx.update(userRef, {
+            avance_anual_2026: nuevoAvance,
+            objetivo_anual_2026: udata?.objetivo_anual_2026 || objetivoAnual,
+          });
+        }
+      } catch (e) { /* noop */ }
     });
     res.json({ ok: true, id: docRef.id });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
@@ -764,7 +908,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         }
       }
 
-      const multaMonto = computePenalty(depData, config);
+      let multaMonto = computePenalty(depData, config);
 
       // 🔴 Validar que plazos fijos y certificados tengan PDF e interés antes de aprobar
       // Nota: depTipo ya fue declarado arriba para el manejo de multas
@@ -880,6 +1024,34 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           // Descontar la multa del monto acreditado al usuario
           const montoMulta = parseFloat(multaMonto || 0);
           const montoUsuarioNeto = Math.max(0, monto - montoMulta);
+          // 📈 LÓGICA DE EXENCIÓN/META MENSUAL 2026 Y AVANCE ANUAL
+          try {
+            const params2026 = loadParametros2026();
+            const anioCfg = parseInt(params2026?.anio || 2026, 10);
+            const diaLimite = parseInt(params2026?.dia_limite_mensual || 10, 10);
+            const fechaDep = depData?.fecha_deposito_detectada || depData?.fecha_deposito || new Date();
+            const jsFechaDep = toJsDate(fechaDep);
+            const yearDep = jsFechaDep.getFullYear();
+            const monthIdx = jsFechaDep.getMonth() + 1;
+            const dayIdx = jsFechaDep.getDate();
+            if (yearDep === anioCfg && (depTipo === 'ahorro' || depTipo === 'deposito')) {
+              const aporteMensual = aporteMensualForUser(userData, params2026);
+              const objetivoAcumuladoMes = aporteMensual * monthIdx; // E(m)
+              const avanceActual = parseFloat(userData?.avance_anual_2026 || 0);
+              const exentoPorAvance = !!(params2026?.reglas?.exencion_multa_si_adelantado) && (avanceActual >= objetivoAcumuladoMes);
+              const exentoPorMesCumplido = !!(params2026?.reglas?.exencion_multa_si_avance_mes_cumplido) && (dayIdx <= diaLimite) && ((avanceActual + montoUsuarioNeto) >= objetivoAcumuladoMes);
+              if (exentoPorAvance || exentoPorMesCumplido) {
+                multaMonto = 0.0;
+                tx.update(depRef, { exento_multa: true });
+              }
+              const nuevoAvance = avanceActual + montoUsuarioNeto;
+              const objetivoAnual = objetivoAnualForUser(userData, params2026);
+              tx.update(db.collection('usuarios').doc(idUsuario), {
+                avance_anual_2026: nuevoAvance,
+                objetivo_anual_2026: userData?.objetivo_anual_2026 || objetivoAnual,
+              });
+            }
+          } catch (e) { /* noop: no bloquear transacción si configuración no está disponible */ }
           const current = (userData[targetField] || 0) + montoUsuarioNeto;
           tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
           tx.set(db.collection('movimientos').doc(), {
@@ -891,14 +1063,15 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
             descripcion: depData?.descripcion || 'Depósito aprobado',
             registrado_por: adminUid,
           });
-          // Actualizar caja solo con el valor de la multa descontada
-          if (montoMulta > 0) {
-            const cajaRefDep = db.collection('caja').doc('estado');
-            const cajaSnapDep = await tx.get(cajaRefDep);
-            let saldoCajaDep = 0.0;
-            if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
-            tx.update(cajaRefDep, { saldo: saldoCajaDep + montoMulta });
-          }
+          // 💰 ACTUALIZAR CAJA: Depósito incrementa saldo completo (monto del voucher)
+          // La lógica es: usuario deposita $100 → caja recibe $100 (ingreso)
+          // Si hay multa, esta ya está incluida en el monto total
+          const cajaRefDep = db.collection('caja').doc('estado');
+          const cajaSnapDep = await tx.get(cajaRefDep);
+          let saldoCajaDep = 0.0;
+          if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
+          // Sumar el monto COMPLETO del depósito a la caja
+          tx.update(cajaRefDep, { saldo: saldoCajaDep + monto });
         }
 
         if (multaMonto > 0) {
@@ -947,6 +1120,22 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           }
           const targetField = fieldForTipo(partTipo);
           const current = (userData[targetField] || 0) + monto;
+          // 📈 Actualizar avance anual 2026 si corresponde (aportes de ahorro)
+          try {
+            const params2026 = loadParametros2026();
+            const anioCfg = parseInt(params2026?.anio || 2026, 10);
+            const fechaDep = depData?.fecha_deposito_detectada || depData?.fecha_deposito || new Date();
+            const jsFechaDep = toJsDate(fechaDep);
+            if (jsFechaDep.getFullYear() === anioCfg && (partTipo === 'ahorro' || partTipo === 'deposito')) {
+              const avanceActual = parseFloat(userData?.avance_anual_2026 || 0);
+              const nuevoAvance = avanceActual + parseFloat(monto || 0);
+              const objetivoAnual = objetivoAnualForUser(userData, params2026);
+              tx.update(db.collection('usuarios').doc(idUsuario), {
+                avance_anual_2026: nuevoAvance,
+                objetivo_anual_2026: userData?.objetivo_anual_2026 || objetivoAnual,
+              });
+            }
+          } catch (e) { /* noop */ }
           tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
           tx.set(db.collection('movimientos').doc(), {
             id_usuario: idUsuario,
@@ -958,7 +1147,16 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
             registrado_por: adminUid,
           });
         }
-        // No sumar el total del depósito a caja; solo sumar las multas al final
+        // 💰 ACTUALIZAR CAJA: Sumar el total del depósito completo (monto original del voucher)
+        // La lógica es: depósito de $100 → se reparte entre usuarios → caja recibe $100 (ingreso)
+        const montoTotalDeposito = parseFloat(depData?.monto || 0);
+        if (montoTotalDeposito > 0) {
+          const cajaRefReparto = db.collection('caja').doc('estado');
+          const cajaSnapReparto = await tx.get(cajaRefReparto);
+          let saldoCajaReparto = 0.0;
+          if (cajaSnapReparto.exists) saldoCajaReparto = parseFloat(cajaSnapReparto.data().saldo || 0);
+          tx.update(cajaRefReparto, { saldo: saldoCajaReparto + montoTotalDeposito });
+        }
 
         // Acumular multas (del detalle y/o multasPorUsuario) para enviar a la caja y registrar movimientos
         if (multasPorUsuario) {
@@ -1129,6 +1327,10 @@ app.post('/api/prestamos/:id/approve', verifyToken, async (req, res) => {
       const cajaSnapCaja = await tx.get(cajaRef);
       let cajaSaldoActual = 0.0;
       if (cajaSnapCaja.exists) cajaSaldoActual = parseFloat(cajaSnapCaja.data().saldo || 0);
+      
+      // 💰 ACTUALIZAR CAJA: Desembolso de préstamo RESTA del saldo (egreso)
+      // La lógica es: caja presta $1000 → saldo disminuye $1000
+      tx.update(cajaRef, { saldo: cajaSaldoActual - finalMonto });
 
       tx.update(preRef, {
         estado: 'activo',

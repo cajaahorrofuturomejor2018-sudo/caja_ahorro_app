@@ -1,0 +1,50 @@
+{
+  "anio": 2026,
+  "aporte_mensual_base": 25,
+  "dia_limite_mensual": 10,
+  "fecha_corte_anual_iso": "2025-12-31T23:59:59Z",
+  "fecha_fundacion_iso": null,
+  "reglas": {
+    "exencion_multa_si_avance_mes_cumplido": true,
+    "exencion_multa_si_adelantado": true,
+    "multa_si_despues_limite_y_avance_insuficiente": true
+  },
+  "categorias": [
+    {
+      "nombre": "fundador",
+      "criterio": {
+        "tipo": "antes_de_fecha_fundacion",
+        "valor": "fecha_fundacion_iso"
+      },
+      "aporte_mensual": 25,
+      "aporte_anual_objetivo": 300,
+      "prioridad": 1
+    },
+    {
+      "nombre": "intermedio",
+      "criterio": {
+        "tipo": "rango_fechas",
+        "desde_iso": null,
+        "hasta_iso": null
+      },
+      "aporte_mensual": 20,
+      "aporte_anual_objetivo": 240,
+      "prioridad": 2
+    },
+    {
+      "nombre": "nuevo",
+      "criterio": {
+        "tipo": "desde_fecha",
+        "desde_iso": null
+      },
+      "aporte_mensual": 15,
+      "aporte_anual_objetivo": 180,
+      "prioridad": 3
+    }
+  ],
+  "observaciones": [
+    "Los valores de 'fecha_fundacion_iso' y rangos deben ser establecidos por admin.",
+    "Si no hay diferenciación por categoría, se usa 'aporte_mensual_base'=25.",
+    "El sistema debe comparar 'avance_anual_2026' por usuario contra el objetivo mensual acumulado y eximir multa si cumple o está adelantado."
+  ]
+}
