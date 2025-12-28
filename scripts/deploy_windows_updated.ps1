@@ -115,5 +115,6 @@ Write-Host "   ✓ Fix de URL de upload (no más /api/api/upload)" -ForegroundCo
 Write-Host "   ✓ Penalties solo desde 2026" -ForegroundColor White
 Write-Host "   ✓ Validación de vouchers antes de aplicar multas" -ForegroundColor White
 Write-Host "   ✓ Sin bloqueo de depósitos por multas pendientes" -ForegroundColor White
-Write-Host "   ✓ Suma acumulativa en totales de usuario (FIX CRÍTICO)" -ForegroundColor Yellow
+Write-Host "   ✓ Suma acumulativa en totales de usuario" -ForegroundColor Yellow
+Write-Host "   ✓ Generación de reportes PDF corregida" -ForegroundColor Yellow
 Write-Host ""
