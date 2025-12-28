@@ -614,41 +614,54 @@ app.post('/api/users/:id/estado', verifyToken, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
 
-// Get caja saldo - calcula dinámicamente desde movimientos
+// Get caja saldo - calcula dinámicamente desde saldos de usuarios
 app.get('/api/caja', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   try {
     const db = admin.firestore();
-    // Calcular saldo dinámico sumando todos los movimientos
-    const movimientosSnap = await db.collection('movimientos').get();
+    // Calcular saldo dinámico sumando todos los total_ahorros, total_certificados, total_plazos_fijos de TODOS los usuarios
+    // Menos los total_prestamos que son adeudos
+    const usuariosSnap = await db.collection('usuarios').get();
     let saldoDinamico = 0.0;
-    movimientosSnap.docs.forEach(doc => {
-      const mov = doc.data();
-      const monto = parseFloat(mov.monto || 0);
-      const tipo = (mov.tipo || '').toLowerCase();
-      // Incrementar caja para depósitos/aportes, decrementar para préstamos desembolsados
-      if (tipo.includes('deposito') || tipo.includes('aporte') || tipo.includes('ahorro') || tipo === 'multa') {
-        saldoDinamico += monto;
-      } else if (tipo.includes('prestamo') && (tipo.includes('desembolso') || tipo.includes('disbursement'))) {
-        saldoDinamico -= monto;
-      }
-    });
-    // También incluir multas si están registradas como movimientos
-    const multasSnap = await db.collection('multas').get();
+    let totalAhorros = 0.0;
+    let totalCertificados = 0.0;
+    let totalPlazos = 0.0;
+    let totalPrestamos = 0.0;
     let totalMultas = 0.0;
-    multasSnap.docs.forEach(doc => {
-      const multa = doc.data();
-      if ((multa.estado || '').toLowerCase() === 'pendiente') {
-        totalMultas += parseFloat(multa.monto || 0);
-      }
+
+    usuariosSnap.docs.forEach(doc => {
+      const usuario = doc.data();
+      const ahorros = parseFloat(usuario.total_ahorros || 0);
+      const certificados = parseFloat(usuario.total_certificados || 0);
+      const plazos = parseFloat(usuario.total_plazos_fijos || 0);
+      const prestamos = parseFloat(usuario.total_prestamos || 0);
+      const multas = parseFloat(usuario.total_multas || 0);
+
+      // Sumar totales para el resumen
+      totalAhorros += ahorros;
+      totalCertificados += certificados;
+      totalPlazos += plazos;
+      totalPrestamos += prestamos;
+      totalMultas += multas;
+
+      // El saldo de caja es: lo que los usuarios han ahorrado/invertido MENOS lo que les hemos prestado
+      // Fórmula: (ahorros + certificados + plazos_fijos) - prestamos + multas recaudadas
+      saldoDinamico += (ahorros + certificados + plazos - prestamos + multas);
     });
-    // Retornar saldo dinámico y almacenado para referencia
+
+    // Retornar saldo dinámico y detalles
     const estadoSnap = await db.collection('caja').doc('estado').get();
     const saldoAlmacenado = estadoSnap.exists ? parseFloat(estadoSnap.data().saldo || 0) : 0;
     res.json({ 
       saldo: saldoDinamico, 
       saldo_almacenado: saldoAlmacenado,
-      total_multas_pendientes: totalMultas,
+      detalle: {
+        total_ahorros: totalAhorros,
+        total_certificados: totalCertificados,
+        total_plazos_fijos: totalPlazos,
+        total_prestamos: totalPrestamos,
+        total_multas: totalMultas
+      },
       fecha_calculo: new Date().toISOString()
     });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
