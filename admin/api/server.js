@@ -573,11 +573,11 @@ app.post('/api/users', verifyToken, async (req, res) => {
       foto_url: fotoUrl || '',
       fecha_registro: admin.firestore.FieldValue.serverTimestamp(),
       total_ahorros: 0.0,
+      total_ahorro_voluntario: 0.0,
       total_prestamos: 0.0,
       total_multas: 0.0,
       total_plazos_fijos: 0.0,
       total_certificados: 0.0,
-      ahorro_voluntario: 0.0,
     });
     res.json({ ok: true, uid });
   } catch (e) {
@@ -642,6 +642,7 @@ app.get('/api/caja', verifyToken, async (req, res) => {
     const usuariosSnap = await db.collection('usuarios').get();
     let saldoDinamico = 0.0;
     let totalAhorros = 0.0;
+    let totalAhorroVoluntario = 0.0;
     let totalCertificados = 0.0;
     let totalPlazos = 0.0;
     let totalPrestamos = 0.0;
@@ -654,6 +655,7 @@ app.get('/api/caja', verifyToken, async (req, res) => {
       const plazos = parseFloat(usuario.total_plazos_fijos || 0);
       const prestamos = parseFloat(usuario.total_prestamos || 0);
       const multas = parseFloat(usuario.total_multas || 0);
+      const ahorroVol = parseFloat(usuario.total_ahorro_voluntario || 0);
 
       // Sumar totales para el resumen
       totalAhorros += ahorros;
@@ -661,10 +663,11 @@ app.get('/api/caja', verifyToken, async (req, res) => {
       totalPlazos += plazos;
       totalPrestamos += prestamos;
       totalMultas += multas;
+      totalAhorroVoluntario += ahorroVol;
 
       // El saldo de caja es: lo que los usuarios han ahorrado/invertido MENOS lo que les hemos prestado
       // Fórmula: (ahorros + certificados + plazos_fijos) - prestamos + multas recaudadas
-      saldoDinamico += (ahorros + certificados + plazos - prestamos + multas);
+      saldoDinamico += (ahorros + ahorroVol + certificados + plazos - prestamos + multas);
     });
 
     // Retornar saldo dinámico y detalles
@@ -675,6 +678,7 @@ app.get('/api/caja', verifyToken, async (req, res) => {
       saldo_almacenado: saldoAlmacenado,
       detalle: {
         total_ahorros: totalAhorros,
+        total_ahorro_voluntario: totalAhorroVoluntario,
         total_certificados: totalCertificados,
         total_plazos_fijos: totalPlazos,
         total_prestamos: totalPrestamos,
@@ -737,7 +741,15 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
       const snap = await tx.get(userRef);
       if (!snap.exists) return;
       const data = snap.data();
-      const field = (() => { switch(tipo){ case 'plazo_fijo': return 'total_plazos_fijos'; case 'certificado': return 'total_certificados'; case 'pago_prestamo': return 'total_prestamos'; default: return 'total_ahorros'; } })();
+      const field = (() => {
+        switch (tipo) {
+          case 'plazo_fijo': return 'total_plazos_fijos';
+          case 'certificado': return 'total_certificados';
+          case 'pago_prestamo': return 'total_prestamos';
+          case 'ahorro_voluntario': return 'total_ahorro_voluntario';
+          default: return 'total_ahorros';
+        }
+      })();
       const current = (data[field] || 0) + monto;
       tx.update(userRef, { [field]: current });
       tx.set(db.collection('movimientos').doc(), { id_usuario: idUsuario, tipo: tipo || 'deposito', referencia_id: docRef.id, monto: monto, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: descripcion || 'Aporte admin', registrado_por: req.user.uid });
