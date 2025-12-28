@@ -390,7 +390,28 @@ app.get('/api/reportes/usuarios', verifyToken, async (req, res) => {
       rows.push([nombre, correo, formatCurrencyLocal(saldo), formatCurrencyLocal(ahorros), formatCurrencyLocal(plazos), formatCurrencyLocal(certificados), formatCurrencyLocal(multas), fechaStr]);
     });
 
-    const fonts = { Roboto: { normal: Buffer.from([]), bold: Buffer.from([]), italics: Buffer.from([]), bolditalics: Buffer.from([]) } };
+    // pdfmake requires font definitions - use minimal config for built-in fonts
+    // These map to PDFKit standard fonts which are always available
+    const fonts = {
+      Courier: {
+        normal: 'Courier',
+        bold: 'Courier-Bold',
+        italics: 'Courier-Oblique',
+        bolditalics: 'Courier-BoldOblique'
+      },
+      Helvetica: {
+        normal: 'Helvetica',
+        bold: 'Helvetica-Bold',
+        italics: 'Helvetica-Oblique',
+        bolditalics: 'Helvetica-BoldOblique'
+      },
+      Times: {
+        normal: 'Times-Roman',
+        bold: 'Times-Bold',
+        italics: 'Times-Italic',
+        bolditalics: 'Times-BoldItalic'
+      }
+    };
     const printer = new PdfPrinter(fonts);
     const now = new Date();
     
@@ -482,6 +503,9 @@ app.get('/api/reportes/usuarios', verifyToken, async (req, res) => {
           columnGap: 20
         }
       ],
+      defaultStyle: {
+        font: 'Helvetica'
+      },
       styles: {
         header: { fontSize: 20, bold: true, color: '#0ea5e9', marginBottom: 4 },
         subheader: { fontSize: 13, color: '#475569', marginBottom: 2, bold: true },
