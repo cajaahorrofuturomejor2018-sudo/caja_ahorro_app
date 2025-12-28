@@ -413,7 +413,10 @@ class _ClienteDashboardState extends State<ClienteDashboard> {
                               double fallback, {
                               bool ocultarSiCero = false,
                             }) {
-                              final display = (value > 0) ? value : fallback;
+                              // CRITICAL FIX: Always use fallback (user's total from Firestore)
+                              // The 'value' parameter (sum from deposits stream) is unreliable
+                              // because it only includes approved deposits in current session
+                              final display = fallback;
                               if (ocultarSiCero && display == 0) {
                                 return const SizedBox.shrink();
                               }
