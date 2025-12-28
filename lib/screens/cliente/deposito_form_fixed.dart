@@ -70,22 +70,10 @@ class _DepositoFormState extends State<DepositoForm> {
   Future<void> _onSave() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // VALIDACIÓN CRÍTICA: Bloquear ahorro y pago_prestamo si hay multas después del día 10
-    if (_hasMultas && _esDepuesDiaDiez) {
-      if (_selectedTipo == 'ahorro' || _selectedTipo == 'pago_prestamo') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              '⚠️ No puede realizar depósitos de ahorro mensual ni pago de préstamos mientras tenga multas pendientes. Por favor, pague sus multas primero.',
-            ),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 5),
-          ),
-        );
-        setState(() => _processing = false);
-        return;
-      }
-    }
+    // IMPORTANTE: Removida la validación que bloqueaba depósitos cuando hay multas.
+    // El usuario puede hacer depósitos normales (ahorro, pago_prestamo, ahorro_voluntario)
+    // incluso si tiene multas pendientes. Las multas se pagan en el formulario específico.
+    // Esta lógica previa causaba bloqueos incorrectos y afectaba la experiencia del usuario.
 
     // Deposito personal: no hay reparto por familia. El depósito se asigna
     // directamente al usuario que lo registra (current user).

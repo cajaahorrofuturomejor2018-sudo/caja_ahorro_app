@@ -56,6 +56,11 @@ class PenaltyCheckService {
     try {
       final now = DateTime.now();
 
+      // CRITICAL: Only apply penalties starting from January 2026
+      if (now.year < 2026) {
+        return 0.0;
+      }
+
       // Solo aplicar multa después del día 10
       if (now.day <= 10) {
         return 0.0;
@@ -93,6 +98,43 @@ class PenaltyCheckService {
 
       // Si no hay depósito de ahorro este mes, aplicar multa
       if (!hasMonthlyDeposit) {
+        // VALIDACIÓN VOUCHER: Verificar si el usuario subió un voucher/comprobante válido
+        // (aprobado o pendiente) en el mes actual antes de aplicar multa
+        final voucherSnapshot = await _db
+            .collection('depositos')
+            .where('id_usuario', isEqualTo: userId)
+            .where('tipo', isEqualTo: 'ahorro')
+            .get();
+
+        // Verificar si hay vouchers del mes actual (aprobado o pendiente)
+        bool hasValidVoucher = false;
+        for (final doc in voucherSnapshot.docs) {
+          final data = doc.data();
+          final estado = data['estado'] as String?;
+          final fechaDeposito = (data['fecha_deposito'] as Timestamp?)?.toDate();
+          final archivoUrl = data['archivo_url'] as String?;
+
+          // Si tiene voucher/comprobante subido y está aprobado o pendiente, exentar
+          if (archivoUrl != null &&
+              archivoUrl.isNotEmpty &&
+              (estado == 'aprobado' || estado == 'pendiente') &&
+              fechaDeposito != null &&
+              fechaDeposito.isAfter(
+                firstDayOfMonth.subtract(const Duration(days: 1)),
+              ) &&
+              fechaDeposito.isBefore(
+                lastDayOfMonth.add(const Duration(days: 1)),
+              )) {
+            hasValidVoucher = true;
+            break;
+          }
+        }
+
+        // Si hay voucher válido, no aplicar multa
+        if (hasValidVoucher) {
+          return 0.0;
+        }
+
         // Evitar duplicar multa del mismo mes si ya existe pendiente
         final existing = await _db
             .collection('multas')
