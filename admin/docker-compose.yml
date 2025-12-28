@@ -18,6 +18,10 @@ services:
       - ./api/serviceAccountKey.json:/run/secrets/serviceAccountKey.json:ro
     ports:
       - "8080:8080"
+    networks:
+      default:
+        aliases:
+          - api
 
   web:
     build:
@@ -32,6 +36,8 @@ services:
       - "5173:80"
     volumes:
       - ./web:/app:ro
+    networks:
+      - default
 
 networks:
   default:
