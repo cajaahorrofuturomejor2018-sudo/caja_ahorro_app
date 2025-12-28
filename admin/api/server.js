@@ -10,16 +10,22 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Service account must be mounted or set as env var MOUNTED_SERVICE_ACCOUNT_JSON
+// Service account must be mounted or provided via env var
 const serviceAccountPath = process.env.SERVICE_ACCOUNT_PATH || '/run/secrets/serviceAccountKey.json';
+const serviceAccountInline = process.env.SERVICE_ACCOUNT_JSON || process.env.MOUNTED_SERVICE_ACCOUNT_JSON;
 if (!path.isAbsolute(serviceAccountPath)) {
   console.error('[admin-api] SERVICE_ACCOUNT_PATH must be set to absolute path');
 }
-let serviceAccount;
 let firebaseInitialized = false;
 try {
-  serviceAccount = require(serviceAccountPath);
-  admin.initializeApp({ 
+  let serviceAccount;
+  if (serviceAccountInline) {
+    serviceAccount = JSON.parse(serviceAccountInline);
+  } else {
+    // Read from mounted file by default
+    serviceAccount = require(serviceAccountPath);
+  }
+  admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     storageBucket: 'cajaahorroapp.firebasestorage.app' // o 'cajaahorroapp.appspot.com'
   });

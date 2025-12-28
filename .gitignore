@@ -12,6 +12,17 @@ admin/api/serviceAccountKey.json
 serviceAccountKey.json
 google-services.json
 
+# Env files (SENSITIVE)
+.env
+.env.*
+admin/.env*
+admin/api/.env*
+admin/web/.env*
+web/.env*
+
+# Any extra service account keys
+admin/api/serviceAccountKey*.json
+
 
 
 # Flutter repo-specific

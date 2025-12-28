@@ -29,20 +29,25 @@ git clone https://github.com/cajaahorrofuturomejor2018-sudo/caja_ahorro_app.git
 cd caja_ahorro_app/admin
 ```
 
-### Paso 2: Configurar Firebase
+### Paso 2: Configurar Firebase (SEGURO)
 
-Coloca tu archivo `serviceAccountKey.json` en `admin/api/`:
+No coloques credenciales dentro del repo. Guarda el archivo `serviceAccountKey.json` fuera del proyecto, por ejemplo en Windows:
 
 ```bash
-# Debe existir:
-admin/api/serviceAccountKey.json
+# Ruta recomendada fuera del repo
+C:\caja\serviceAccountKey.json
 ```
 
-### Paso 3: Iniciar servicios con Docker Compose
+El contenedor monta ese archivo en `/run/secrets/serviceAccountKey.json` y el backend lo toma desde `SERVICE_ACCOUNT_PATH`.
 
-```bash
-cd admin
-docker-compose up -d
+### Paso 3: Iniciar servicios con Docker Compose (producción)
+
+Usa el archivo `admin/docker-compose.prod.yml` que apunta a las imágenes publicadas y monta el secreto desde Windows:
+
+```powershell
+Set-Location "C:\Users\trave\app_cajaAhorros\caja_ahorro_app"
+docker compose -f admin\docker-compose.prod.yml pull
+docker compose -f admin\docker-compose.prod.yml up -d
 ```
 
 Esto levanta:
@@ -169,12 +174,12 @@ docker login
 
 ### 3. Pull en servidor de producción:
 
-```bash
-docker pull rjacebo956/caja-ahorro-admin-api:latest
-docker pull rjacebo956/caja-ahorro-admin-web:latest
+```powershell
+docker pull cajawebapk/caja-admin-api:latest
+docker pull cajawebapk/caja-admin-web:latest
 
-docker-compose down
-docker-compose up -d
+docker compose -f admin\docker-compose.prod.yml down
+docker compose -f admin\docker-compose.prod.yml up -d
 ```
 
 ## 📋 Puertos Utilizados
@@ -188,12 +193,12 @@ docker-compose up -d
 
 ### El contenedor del API no inicia:
 
-```bash
+```powershell
 # Ver logs
 docker logs caja_admin_api --tail 50
 
-# Verificar que existe serviceAccountKey.json
-ls admin/api/serviceAccountKey.json
+# Verificar que existe el secreto en la ruta de Windows
+Test-Path "C:\caja\serviceAccountKey.json"
 ```
 
 ### El contenedor web no puede conectar al API:

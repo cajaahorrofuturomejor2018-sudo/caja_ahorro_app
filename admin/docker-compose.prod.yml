@@ -1,0 +1,32 @@
+version: '3.8'
+services:
+  api:
+    image: cajawebapk/caja-admin-api:latest
+    container_name: caja_admin_api
+    restart: unless-stopped
+    environment:
+      SERVICE_ACCOUNT_PATH: /run/secrets/serviceAccountKey.json
+      MOCK_API: "${MOCK_API:-false}"
+      DISABLE_AUTH: "${DISABLE_AUTH:-false}"
+      ADMIN_EMAILS: "${ADMIN_EMAILS:-cajaahorrofuturomejor2018@gmail.com}"
+    volumes:
+      - "${SERVICE_ACCOUNT_HOST_PATH}:/run/secrets/serviceAccountKey.json:ro"
+    networks:
+      default:
+        aliases:
+          - api
+    ports:
+      - "8080:8080"
+
+  web:
+    image: cajawebapk/caja-admin-web:latest
+    container_name: caja_admin_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+networks:
+  default:
+    name: caja_admin_network
