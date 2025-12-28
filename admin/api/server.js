@@ -1000,6 +1000,49 @@ app.get('/api/prestamos', verifyToken, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
 
+// Admin: Migrar ahorro voluntario a campo estándar de totales
+// Recorre usuarios y asegura `total_ahorro_voluntario`, migrando desde `ahorro_voluntario` si existe.
+app.post('/api/admin/migrar-ahorro-voluntario', verifyToken, async (req, res) => {
+  if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
+  try {
+    const db = admin.firestore();
+    const usuariosSnap = await db.collection('usuarios').get();
+    let processed = 0, updated = 0, skipped = 0;
+    let batch = db.batch();
+    let ops = 0;
+    for (const doc of usuariosSnap.docs) {
+      processed++;
+      const u = doc.data() || {};
+      const hasTotal = typeof u.total_ahorro_voluntario !== 'undefined';
+      const legacy = u.ahorro_voluntario;
+      const currentTotal = parseFloat(u.total_ahorro_voluntario || 0);
+      const legacyVal = typeof legacy !== 'undefined' ? parseFloat(legacy || 0) : null;
+      const newTotal = hasTotal ? currentTotal : (legacyVal != null ? legacyVal : 0);
+      // Si no hay cambios, saltar
+      if (hasTotal && legacyVal == null) { skipped++; continue; }
+      const ref = db.collection('usuarios').doc(doc.id);
+      const updates = { total_ahorro_voluntario: newTotal };
+      // Borrar campo legacy si existe
+      if (typeof legacy !== 'undefined') {
+        updates.ahorro_voluntario = admin.firestore.FieldValue.delete();
+      }
+      batch.update(ref, updates);
+      ops++;
+      updated++;
+      if (ops >= 450) { // usar margen bajo el límite de 500
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) await batch.commit();
+    res.json({ ok: true, usuarios_procesados: processed, usuarios_actualizados: updated, usuarios_sin_cambios: skipped });
+  } catch (e) {
+    console.error('[admin-api] migrar-ahorro-voluntario error:', e);
+    res.status(500).json({ error: e.message || e.toString() });
+  }
+});
+
 // Add a payment to a loan (admin)
 app.post('/api/prestamos/:id/pagos', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
