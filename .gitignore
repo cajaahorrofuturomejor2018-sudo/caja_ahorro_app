@@ -19,6 +19,7 @@ admin/.env*
 admin/api/.env*
 admin/web/.env*
 web/.env*
+!admin/.env.prod.example
 
 # Any extra service account keys
 admin/api/serviceAccountKey*.json
