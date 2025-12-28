@@ -575,8 +575,20 @@ app.post('/api/users', verifyToken, async (req, res) => {
     });
     res.json({ ok: true, id: uid });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message || e.toString() });
+    console.error('[admin-api] Error creating user:', e);
+    const code = e?.code || e?.errorInfo?.code || '';
+    const message = e?.message || e?.errorInfo?.message || e?.toString?.() || '';
+    // Handle specific Firebase Auth errors
+    if (code === 'auth/email-already-exists' || /already in use|already exists/i.test(message)) {
+      return res.status(409).json({ error: 'El email ya est? registrado en otro usuario' });
+    }
+    if (code === 'auth/invalid-email' || /invalid email/i.test(message)) {
+      return res.status(400).json({ error: 'Email inv?lido' });
+    }
+    if (code === 'auth/weak-password' || /password/i.test(message)) {
+      return res.status(400).json({ error: 'Contrase?a muy d?bil' });
+    }
+    res.status(500).json({ error: message || 'Error al crear usuario' });
   }
 });
 
@@ -1575,3 +1587,5 @@ app.post('/api/deposits', verifyToken, async (req, res) => {
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`[admin-api] Listening on ${port}`));
+
+
