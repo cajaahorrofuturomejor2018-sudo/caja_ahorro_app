@@ -47,9 +47,12 @@ export async function apiGet(endpoint, config = {}) {
  */
 export async function apiPost(endpoint, payload = {}, config = {}) {
   try {
+    console.log(`[apiPost] Calling: ${endpoint}`, payload);
     const response = await client.post(endpoint, payload, config);
+    console.log(`[apiPost] Response from ${endpoint}:`, response.status, response.data);
     return { success: true, data: response.data };
   } catch (error) {
+    console.error(`[apiPost] Error on ${endpoint}:`, error.response?.status, error.response?.data);
     return { success: false, error: error.response?.data?.error || error.message || 'Error desconocido' };
   }
 }
@@ -103,7 +106,8 @@ export async function approveDeposit(depositId, approve = true, observaciones = 
   const payload = { approve, observaciones };
   if (interes !== null) payload.interes = interes;
   if (documento_url !== null) payload.documento_url = documento_url;
-  return apiPost(`/deposits/${depositId}/approve`, payload);
+  console.log('[approveDeposit]', `Calling /api/deposits/${depositId}/approve with:`, payload);
+  return apiPost(`/api/deposits/${depositId}/approve`, payload);
 }
 
 /**

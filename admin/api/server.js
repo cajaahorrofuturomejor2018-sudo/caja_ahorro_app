@@ -818,15 +818,19 @@ app.get('/api/aggregate_totals', verifyToken, async (req, res) => {
 
 // Approve or reject a deposit with transaction to update user totals
 app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
+  console.log('[admin-api] POST /api/deposits/:id/approve - Request received:', req.params.id, req.body);
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   const depositId = req.params.id;
   const adminUid = req.user.uid;
   const { approve = true, observaciones = '' } = req.body || {};
+  console.log('[admin-api] Admin:', adminUid, 'Approve:', approve, 'DepositID:', depositId);
   try {
     const db = admin.firestore();
+    console.log('[admin-api] Starting transaction...');
     
     await db.runTransaction(async (tx) => {
       // Read deposit first
+      console.log('[admin-api] Reading deposit:', depositId);
       const depRef = db.collection('depositos').doc(depositId);
       const depSnap = await tx.get(depRef);
       if (!depSnap.exists) throw new Error('Depósito no encontrado');
@@ -835,16 +839,24 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       const idUsuario = depData.id_usuario;
       const tipo = depData.tipo || 'ahorro';
       const monto = parseFloat(depData.monto || 0);
+      console.log('[admin-api] Deposit read: user=', idUsuario, 'type=', tipo, 'amount=', monto);
       
       // Read user if approving (to update totals)
       let userRef = null;
       let userSnap = null;
       if (approve && idUsuario) {
+        console.log('[admin-api] Reading user:', idUsuario);
         userRef = db.collection('usuarios').doc(idUsuario);
         userSnap = await tx.get(userRef);
+        if (userSnap.exists) {
+          console.log('[admin-api] User found:', userSnap.data());
+        } else {
+          console.log('[admin-api] WARNING: User NOT found:', idUsuario);
+        }
       }
       
       // Update deposit status
+      console.log('[admin-api] Updating deposit status to:', approve ? 'aprobado' : 'rechazado');
       tx.update(depRef, {
         validado: approve,
         estado: approve ? 'aprobado' : 'rechazado',
@@ -856,6 +868,7 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
       // If approving, update user totals and create movement
       if (approve && userRef && userSnap && userSnap.exists) {
         const userData = userSnap.data();
+        console.log('[admin-api] User exists, updating totals...');
         
         // Determine target field based on deposit type
         const field = (() => {
@@ -871,9 +884,12 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         
         // Increment user total (accumulative sum)
         const currentTotal = parseFloat(userData[field] || 0);
-        tx.update(userRef, { [field]: currentTotal + monto });
+        const newTotal = currentTotal + monto;
+        console.log('[admin-api] Updating', field, ':', currentTotal, '+', monto, '=', newTotal);
+        tx.update(userRef, { [field]: newTotal });
         
         // Create movement record
+        console.log('[admin-api] Creating movement record...');
         tx.set(db.collection('movimientos').doc(), {
           id_usuario: idUsuario,
           tipo: tipo || 'deposito',
@@ -885,16 +901,20 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
         });
         
         // Update caja balance
+        console.log('[admin-api] Updating caja balance...');
         const cajaRef = db.collection('caja').doc('estado');
         const cajaSnap = await tx.get(cajaRef);
         const cajaSaldo = parseFloat(cajaSnap.exists ? (cajaSnap.data().saldo || 0) : 0);
+        console.log('[admin-api] Caja: ', cajaSaldo, '+', monto, '=', cajaSaldo + monto);
         tx.update(cajaRef, { saldo: cajaSaldo + monto });
       }
     });
     
+    console.log('[admin-api] ✅ Transaction completed successfully');
     res.json({ ok: true, message: approve ? 'Deposito aprobado' : 'Deposito rechazado' });
   } catch (e) {
-    console.error('[admin-api] Error approving deposit:', e);
+    console.error('[admin-api] ❌ ERROR approving deposit:', e.message);
+    console.error('[admin-api] Stack:', e.stack);
     res.status(500).json({ error: e.message || 'Error al procesar deposito' });
   }
 });
