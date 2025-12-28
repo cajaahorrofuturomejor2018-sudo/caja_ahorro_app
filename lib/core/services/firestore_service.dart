@@ -453,7 +453,7 @@ class FirestoreService {
   }
 
   /// Calcula la multa (si aplica) de un depósito según configuración y fecha detectada.
-  double _computePenaltyForDeposit(
+  static double _computePenaltyForDeposit(
     Map<String, dynamic> depData,
     Map<String, dynamic>? config,
   ) {
@@ -557,7 +557,16 @@ class FirestoreService {
   }
 
   /// Public wrapper for penalty computation (useful for tests).
+  // Instance wrapper retained for backwards compatibility. Prefer static.
   double computePenaltyForDeposit(
+    Map<String, dynamic> depData,
+    Map<String, dynamic>? config,
+  ) {
+    return FirestoreService.computePenaltyForDepositStatic(depData, config);
+  }
+
+  /// Static helper usable in tests without Firebase initialization.
+  static double computePenaltyForDepositStatic(
     Map<String, dynamic> depData,
     Map<String, dynamic>? config,
   ) {

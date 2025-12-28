@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:caja_ahorro_app/core/services/firestore_service.dart';
 
 void main() {
-  final svc = FirestoreService();
+  // Usar método estático para evitar necesidad de inicializar Firebase
 
   group('Penalty rules', () {
     test('ahorro on time -> no penalty', () {
@@ -15,7 +15,7 @@ void main() {
         'enforce_voucher_date': true,
         'penalty_rules': {'ahorro_per_week': 1.0},
       };
-      final p = svc.computePenaltyForDeposit(dep, cfg);
+      final p = FirestoreService.computePenaltyForDepositStatic(dep, cfg);
       expect(p, 0.0);
     });
 
@@ -29,7 +29,7 @@ void main() {
         'enforce_voucher_date': true,
         'penalty_rules': {'ahorro_per_week': 1.0},
       };
-      final p = svc.computePenaltyForDeposit(dep, cfg);
+      final p = FirestoreService.computePenaltyForDepositStatic(dep, cfg);
       expect(p, 1.0);
     });
 
@@ -43,7 +43,7 @@ void main() {
         'enforce_voucher_date': true,
         'penalty_rules': {'ahorro_per_week': 1.0},
       };
-      final p = svc.computePenaltyForDeposit(dep, cfg);
+      final p = FirestoreService.computePenaltyForDepositStatic(dep, cfg);
       expect(p, 2.0);
     });
 
@@ -54,7 +54,7 @@ void main() {
         'monto': 200.0,
       };
       final cfg = {'enforce_voucher_date': true};
-      final p = svc.computePenaltyForDeposit(dep, cfg);
+      final p = FirestoreService.computePenaltyForDepositStatic(dep, cfg);
       expect(p, closeTo(200.0 * 0.07, 0.0001));
     });
 
@@ -65,7 +65,7 @@ void main() {
         'monto': 150.0,
       };
       final cfg = {'enforce_voucher_date': true};
-      final p = svc.computePenaltyForDeposit(dep, cfg);
+      final p = FirestoreService.computePenaltyForDepositStatic(dep, cfg);
       expect(p, closeTo(150.0 * 0.10, 0.0001));
     });
   });

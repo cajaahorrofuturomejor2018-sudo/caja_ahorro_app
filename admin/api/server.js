@@ -542,15 +542,20 @@ app.get('/api/deposits/pending', verifyToken, async (req, res) => {
 // Create user
 app.post('/api/users', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
-  const { nombre, correo, password, rol, telefono, direccion, estado, fotoUrl } = req.body || {};
-  if (!correo || !password || !nombre || !rol) return res.status(400).json({ error: 'Missing required fields' });
+  const { nombre, correo, email, password, rol, telefono, direccion, estado, fotoUrl } = req.body || {};
+  // Accept both 'email' and 'correo' field names
+  const emailToUse = email || correo;
+  const roleToUse = rol || 'usuario';
+  if (!emailToUse || !password || !nombre) return res.status(400).json({ error: 'Missing required fields' });
   try {
-    const userRecord = await admin.auth().createUser({ email: correo, password, displayName: nombre });
+    const userRecord = await admin.auth().createUser({ email: emailToUse, password, displayName: nombre });
     const uid = userRecord.uid;
     // Set custom claim admin if role suggests admin privileges
     try {
-      if (rol === 'admin' || rol === 'superadmin') {
+      if (roleToUse === 'admin' || roleToUse === 'superadmin') {
         await admin.auth().setCustomUserClaims(uid, { admin: true });
+      } else {
+        await admin.auth().setCustomUserClaims(uid, { admin: false });
       }
     } catch (e) {
       console.warn('[admin-api] Failed to set custom claims', e);
@@ -559,8 +564,9 @@ app.post('/api/users', verifyToken, async (req, res) => {
     await db.collection('usuarios').doc(uid).set({
       id: uid,
       nombres: nombre,
-      correo: correo,
-      rol: rol,
+      correo: emailToUse,
+      email: emailToUse,
+      rol: roleToUse,
       telefono: telefono || '',
       direccion: direccion || '',
       estado: estado || 'activo',
@@ -573,20 +579,20 @@ app.post('/api/users', verifyToken, async (req, res) => {
       total_certificados: 0.0,
       ahorro_voluntario: 0.0,
     });
-    res.json({ ok: true, id: uid });
+    res.json({ ok: true, uid });
   } catch (e) {
     console.error('[admin-api] Error creating user:', e);
     const code = e?.code || e?.errorInfo?.code || '';
     const message = e?.message || e?.errorInfo?.message || e?.toString?.() || '';
     // Handle specific Firebase Auth errors
     if (code === 'auth/email-already-exists' || /already in use|already exists/i.test(message)) {
-      return res.status(409).json({ error: 'El email ya est? registrado en otro usuario' });
+      return res.status(409).json({ error: 'El email ya está registrado en otro usuario' });
     }
     if (code === 'auth/invalid-email' || /invalid email/i.test(message)) {
-      return res.status(400).json({ error: 'Email inv?lido' });
+      return res.status(400).json({ error: 'Email inválido' });
     }
     if (code === 'auth/weak-password' || /password/i.test(message)) {
-      return res.status(400).json({ error: 'Contrase?a muy d?bil' });
+      return res.status(400).json({ error: 'Contraseña muy débil' });
     }
     res.status(500).json({ error: message || 'Error al crear usuario' });
   }
@@ -775,578 +781,28 @@ app.get('/api/aggregate_totals', verifyToken, async (req, res) => {
 });
 
 // Approve a deposit - this is a basic version; advanced distribution logic isn't implemented yet
+// Approve or reject a deposit - simplified endpoint
 app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   const depositId = req.params.id;
   const adminUid = req.user.uid;
-  const { approve = true, observaciones = '', detalleOverride = null, multasPorUsuario = null, interes = null, documento_url = null } = req.body || {};
+  const { approve = true, observaciones = '' } = req.body || {};
   try {
     const db = admin.firestore();
-
-    // Helper: read config
-    async function getConfiguracion() {
-      const snap = await db.collection('configuracion').doc('general').get();
-      if (snap.exists) return snap.data();
-      const snap2 = await db.collection('configuracion_global').doc('parametros').get();
-      if (snap2.exists) return snap2.data();
-      return null;
-    }
-
-    function parseDetalle(raw) {
-      if (!raw) return null;
-      if (Array.isArray(raw)) return raw.map((e) => ({ ...e }));
-      if (typeof raw === 'string') {
-        try {
-          const dec = JSON.parse(raw);
-          if (Array.isArray(dec)) return dec.map((e) => ({ ...e }));
-        } catch (e) {
-          return null;
-        }
-      }
-      return null;
-    }
-
-    function computePenalty(depData, config) {
-      try {
-        // Solo aplicar multas desde 2026
-        const now = new Date();
-        if (now.getFullYear() < 2026) return 0.0;
-        const enforceDate = (config?.enforce_voucher_date) ?? false;
-        if (!enforceDate) return 0.0;
-        const detected = depData?.fecha_deposito_detectada; // fecha efectiva del pago (voucher)
-        const dueRaw = (config?.due_schedule_json) || (config?.due_schedule); // fecha límite del ahorro/prestamo
-        const grace = (config?.grace_days) ?? 0; // días de gracia
-        if (!detected || !dueRaw) return 0.0;
-        const tryParse = (raw) => {
-          if (!raw) return null;
-          const s = raw.toString();
-          const d = new Date(s);
-          if (!isNaN(d.getTime())) return d;
-          const sep = s.includes('/') ? '/' : (s.includes('-') ? '-' : null);
-          if (!sep) return null;
-          const parts = s.split(sep).map(p => parseInt(p.replace(/[^0-9]/g,''),10));
-          if (parts.length < 3) return null;
-          let day = parts[0], month = parts[1], year = parts[2];
-          if (year < 100) year += 2000;
-          if (parts[0] > 31) { year = parts[0]; month = parts[1]; day = parts[2]; }
-          return new Date(year, month - 1, day);
-        }
-        const detectedDate = tryParse(detected);
-        let dueDate = tryParse(dueRaw);
-        if (!dueDate && typeof dueRaw === 'string') {
-          try {
-            const parsed = JSON.parse(dueRaw);
-            if (parsed && typeof parsed === 'object') {
-              const first = Object.values(parsed)[0];
-              dueDate = tryParse(first);
-            }
-          } catch (e) {}
-        }
-        if (!detectedDate || !dueDate) return 0.0;
-        const cutoff = new Date(dueDate.getTime());
-        cutoff.setDate(cutoff.getDate() + (grace ?? 0));
-        if (detectedDate <= cutoff) return 0.0;
-        // Días de atraso desde el cutoff hasta la fecha de pago
-        const msPerDay = 24 * 60 * 60 * 1000;
-        const daysLate = Math.floor((detectedDate.getTime() - cutoff.getTime()) / msPerDay);
-        if (daysLate <= 0) return 0.0;
-        const pen = config?.penalty || {};
-        // Nuevos tipos: per_day_percent, per_day_fixed (default: per_day_fixed)
-        const pType = pen?.type || 'per_day_fixed';
-        const pVal = parseFloat(pen?.value || 0);
-        const monto = parseFloat(depData?.monto || 0);
-        if (pType === 'per_day_percent') return daysLate * (monto * pVal / 100.0);
-        // per_day_fixed
-        return daysLate * pVal;
-      } catch (e) {
-        return 0.0;
-      }
-    }
-
-    /**
-     * Reparte automáticamente un monto en cuotas mensuales de $25
-     * Para ahorros mensuales, cada $25 representa un mes de aporte
-     * Ejemplo: $75 = 3 meses (enero, febrero, marzo)
-     */
-    function splitMonthlyDeposit(monto, fechaDeposito, config) {
-      const MONTHLY_AMOUNT = 25.0;
-      const monthNames = [
-        'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-        'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
-      ];
-
-      // Si el monto es menor a $25, no hay reparto
-      if (monto < MONTHLY_AMOUNT) {
-        return null; // Indica que no se puede repartir (depósito inválido o parcial)
-      }
-
-      // Calcular cuántos meses completos cubre el depósito
-      const numMeses = Math.floor(monto / MONTHLY_AMOUNT);
-      const sobrante = monto - (numMeses * MONTHLY_AMOUNT);
-
-      // Determinar el mes de inicio (basado en fecha de depósito)
-      const depositDate = new Date(fechaDeposito || new Date());
-      const currentMonth = depositDate.getMonth(); // 0-11
-      const currentYear = depositDate.getFullYear();
-
-      // Crear el detalle de reparto mensual (retrocediendo desde el mes actual)
-      const detalle = [];
-      for (let i = 0; i < numMeses; i++) {
-        // Calcular mes y año correctamente incluso al cruzar años
-        const monthOffset = numMeses - 1 - i; // Cuántos meses retroceder
-        let targetMonth = currentMonth - monthOffset;
-        let targetYear = currentYear;
-        
-        // Ajustar año si retrocedemos más allá de enero
-        while (targetMonth < 0) {
-          targetMonth += 12;
-          targetYear -= 1;
-        }
-        
-        const mes = monthNames[targetMonth];
-        detalle.push({
-          mes,
-          monto: MONTHLY_AMOUNT,
-          año: targetYear
-        });
-      }
-
-      return {
-        detalle,
-        mesesCubiertos: numMeses,
-        sobrante,
-        totalRepartido: numMeses * MONTHLY_AMOUNT
-      };
-    }
-
-      // Transactional approve logic
-    await db.runTransaction(async (tx) => {
-      const depRef = db.collection('depositos').doc(depositId);
-      const depSnap = await tx.get(depRef);
-      if (!depSnap.exists) throw new Error('Depósito no encontrado');
-      const depData = depSnap.data();
-      if (!approve) {
-        tx.update(depRef, {
-          validado: false,
-          estado: 'rechazado',
-          id_admin: adminUid,
-          observaciones: observaciones || '',
-          fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        return;
-      }
-
-      // 🔴 SI EL DEPÓSITO ES DE TIPO 'multa' Y SE APRUEBA, MARCAR LAS MULTAS DEL USUARIO COMO 'pagada'
-      const depTipo = depData?.tipo || 'ahorro';
-      const depUsuarioId = depData?.id_usuario;
-      if (approve && depTipo === 'multa' && depUsuarioId) {
-        // Obtener todas las multas pendientes del usuario (fuera de la transacción)
-        const multasSnapBefore = await db.collection('multas')
-          .where('id_usuario', '==', depUsuarioId)
-          .where('estado', '==', 'pendiente')
-          .get();
-        
-        // Dentro de la transacción, marcar cada una como 'pagada'
-        for (const multaDoc of multasSnapBefore.docs) {
-          tx.update(db.collection('multas').doc(multaDoc.id), {
-            estado: 'pagada',
-            fecha_pago: admin.firestore.FieldValue.serverTimestamp(),
-            deposito_pago_id: depositId,
-          });
-        }
-        
-        // Actualizar total_multas del usuario a 0
-        const userRef = db.collection('usuarios').doc(depUsuarioId);
-        const userSnap = await tx.get(userRef);
-        if (userSnap.exists) {
-          tx.update(userRef, { total_multas: 0.0 });
-        }
-      }      const config = await getConfiguracion();
-
-      const voucherCfg = (config?.voucher_reuse_block) || {};
-      const voucherBlockEnabled = voucherCfg?.enabled || false;
-      const voucherTtl = voucherCfg?.ttl_days || 0;
-      const voucherHash = depData?.voucher_hash || '';
-      const voucherFileHash = depData?.voucher_file_hash || '';
-      if (voucherBlockEnabled && voucherHash) {
-        // check duplicate
-        const dupQ = await db.collection('depositos').where('voucher_hash', '==', voucherHash).get();
-        for (const d of dupQ.docs) {
-          if (d.id === depositId) continue;
-          if (voucherTtl > 0) {
-            const ts = d.data()?.fecha_registro;
-            if (ts && ts.toDate) {
-              const age = (Date.now() - ts.toDate().getTime()) / (1000 * 60 * 60 * 24);
-              if (age <= voucherTtl) throw new Error('Voucher duplicado detectado');
-            }
-          } else {
-            throw new Error('Voucher duplicado detectado');
-          }
-        }
-      }
-
-      let multaMonto = computePenalty(depData, config);
-
-      // 🔴 Validar que plazos fijos y certificados tengan PDF e interés antes de aprobar
-      // Nota: depTipo ya fue declarado arriba para el manejo de multas
-      if (approve && (depTipo === 'plazo_fijo' || depTipo === 'certificado')) {
-        if (!documento_url && !depData?.documento_url) {
-          throw new Error('Debe cargar el documento PDF antes de aprobar un ' + depTipo);
-        }
-        if (!interes && !depData?.interes_porcentaje) {
-          throw new Error('Debe ingresar el interés % antes de aprobar un ' + depTipo);
-        }
-      }
-
-      // Construir objeto de actualización del depósito
-      const updateData = {
-        validado: true,
-        estado: 'aprobado',
-        id_admin: adminUid,
-        observaciones: observaciones || '',
-        fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
-      };
-
-      // Agregar interés y documento para plazos fijos y certificados
-      if ((depTipo === 'plazo_fijo' || depTipo === 'certificado') && interes) {
-        updateData.interes_porcentaje = parseFloat(interes);
-      }
-      if ((depTipo === 'plazo_fijo' || depTipo === 'certificado') && documento_url) {
-        updateData.documento_url = documento_url;
-      }
-
-      // Actualizar el depósito con los datos
-      tx.update(depRef, updateData);
-
-      let detalle = detalleOverride || parseDetalle(depData?.detalle_por_usuario);
-      let montoSobrante = 0.0;
-      if (detalle && detalle.length > 0) {
-        // check sum <= monto
-        const montoTotal = parseFloat(depData?.monto || 0);
-        let sumDetalle = 0.0;
-        for (const p of detalle) { sumDetalle += parseFloat(p.monto || p['monto'] || 0); }
-        if (Math.round(sumDetalle * 100) > Math.round(montoTotal * 100)) {
-          throw new Error('La suma del detalle excede el monto del depósito');
-        }
-        montoSobrante = montoTotal - sumDetalle;
-      }
-
-      // Collect UIDs to read
-      const uidsToRead = new Set();
-      if (!detalle || detalle.length === 0) {
-        const idUsuario = depData?.id_usuario;
-        if (!idUsuario) throw new Error('Depósito sin id_usuario');
-        uidsToRead.add(idUsuario);
-        if (multaMonto > 0) uidsToRead.add(idUsuario);
-      } else {
-        for (const part of detalle) {
-          if (part?.id_usuario) uidsToRead.add(part.id_usuario);
-        }
-        if (multaMonto > 0) {
-          const autor = depData?.id_usuario; if (autor) uidsToRead.add(autor);
-        }
-      }
-      if (multasPorUsuario) { Object.keys(multasPorUsuario).forEach(k => uidsToRead.add(k)); }
-
-      const userSnaps = {};
-      for (const uid of Array.from(uidsToRead)) {
-        const snap = await tx.get(db.collection('usuarios').doc(uid));
-        userSnaps[uid] = snap;
-      }
-
-      if (!detalle || detalle.length === 0) {
-        const idUsuario = depData?.id_usuario;
-        const monto = parseFloat(depData?.monto || 0);
-        const userSnap = userSnaps[idUsuario];
-        if (!userSnap || !userSnap.exists) throw new Error('Usuario del depósito no encontrado');
-        const userData = userSnap.data();
-        const depTipo = depData?.tipo || 'ahorro';
-
-        // 🚀 AUTO-REPARTO MENSUAL: Si el monto es ≥ $25 y es tipo "ahorro", repartir automáticamente
-        if (depTipo === 'ahorro' && monto >= 25) {
-          const repartoResult = splitMonthlyDeposit(monto, depData?.fecha_deposito_detectada, config);
-          if (repartoResult && repartoResult.detalle) {
-            // Convertir el reparto a formato detalle estándar
-            detalle = repartoResult.detalle.map(item => ({
-              id_usuario: idUsuario,
-              monto: item.monto,
-              mes: item.mes,
-              año: item.año
-            }));
-            
-            // Guardar el reparto en el depósito para auditoría
-            tx.update(depRef, {
-              detalle_auto_generado: true,
-              detalle_por_usuario: JSON.stringify(detalle),
-              meses_cubiertos: repartoResult.mesesCubiertos,
-              sobrante: repartoResult.sobrante
-            });
-
-            console.log(`✅ Auto-reparto mensual generado: ${repartoResult.mesesCubiertos} meses, sobrante: $${repartoResult.sobrante}`);
-          }
-        }
-
-        // Si después del auto-reparto NO hay detalle (depósito < $25 o no es ahorro), usar lógica simple
-        if (!detalle || detalle.length === 0) {
-          function fieldForTipo(tipo) {
-            switch (tipo) {
-              case 'plazo_fijo': return 'total_plazos_fijos';
-              case 'certificado': return 'total_certificados';
-              case 'pago_prestamo': return 'total_prestamos';
-              case 'ahorro':
-              default: return 'total_ahorros';
-            }
-          }
-          const targetField = fieldForTipo(depTipo);
-          // Descontar la multa del monto acreditado al usuario
-          const montoMulta = parseFloat(multaMonto || 0);
-          const montoUsuarioNeto = Math.max(0, monto - montoMulta);
-          // 📈 LÓGICA DE EXENCIÓN/META MENSUAL 2026 Y AVANCE ANUAL
-          try {
-            const params2026 = loadParametros2026();
-            const anioCfg = parseInt(params2026?.anio || 2026, 10);
-            const diaLimite = parseInt(params2026?.dia_limite_mensual || 10, 10);
-            const fechaDep = depData?.fecha_deposito_detectada || depData?.fecha_deposito || new Date();
-            const jsFechaDep = toJsDate(fechaDep);
-            const yearDep = jsFechaDep.getFullYear();
-            const monthIdx = jsFechaDep.getMonth() + 1;
-            const dayIdx = jsFechaDep.getDate();
-            if (yearDep === anioCfg && (depTipo === 'ahorro' || depTipo === 'deposito')) {
-              const aporteMensual = aporteMensualForUser(userData, params2026);
-              const objetivoAcumuladoMes = aporteMensual * monthIdx; // E(m)
-              const avanceActual = parseFloat(userData?.avance_anual_2026 || 0);
-              const exentoPorAvance = !!(params2026?.reglas?.exencion_multa_si_adelantado) && (avanceActual >= objetivoAcumuladoMes);
-              const exentoPorMesCumplido = !!(params2026?.reglas?.exencion_multa_si_avance_mes_cumplido) && (dayIdx <= diaLimite) && ((avanceActual + montoUsuarioNeto) >= objetivoAcumuladoMes);
-              if (exentoPorAvance || exentoPorMesCumplido) {
-                multaMonto = 0.0;
-                tx.update(depRef, { exento_multa: true });
-              }
-              const nuevoAvance = avanceActual + montoUsuarioNeto;
-              const objetivoAnual = objetivoAnualForUser(userData, params2026);
-              tx.update(db.collection('usuarios').doc(idUsuario), {
-                avance_anual_2026: nuevoAvance,
-                objetivo_anual_2026: userData?.objetivo_anual_2026 || objetivoAnual,
-              });
-            }
-          } catch (e) { /* noop: no bloquear transacción si configuración no está disponible */ }
-          const current = (userData[targetField] || 0) + montoUsuarioNeto;
-          tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
-          tx.set(db.collection('movimientos').doc(), {
-            id_usuario: idUsuario,
-            tipo: depTipo || 'deposito',
-            referencia_id: depositId,
-            monto: montoUsuarioNeto,
-            fecha: admin.firestore.FieldValue.serverTimestamp(),
-            descripcion: depData?.descripcion || 'Depósito aprobado',
-            registrado_por: adminUid,
-          });
-          // 💰 ACTUALIZAR CAJA: Depósito incrementa saldo completo (monto del voucher)
-          // La lógica es: usuario deposita $100 → caja recibe $100 (ingreso)
-          // Si hay multa, esta ya está incluida en el monto total
-          const cajaRefDep = db.collection('caja').doc('estado');
-          const cajaSnapDep = await tx.get(cajaRefDep);
-          let saldoCajaDep = 0.0;
-          if (cajaSnapDep.exists) saldoCajaDep = parseFloat(cajaSnapDep.data().saldo || 0);
-          // Sumar el monto COMPLETO del depósito a la caja
-          tx.update(cajaRefDep, { saldo: saldoCajaDep + monto });
-        }
-
-        if (multaMonto > 0) {
-          // Enviar multa a la caja (documento caja/estado)
-          const cajaRef = db.collection('caja').doc('estado');
-          const cajaSnap = await tx.get(cajaRef);
-          let currentCaja = 0.0;
-          if (cajaSnap.exists) currentCaja = parseFloat(cajaSnap.data().saldo || 0);
-          tx.update(cajaRef, { saldo: currentCaja + multaMonto });
-
-          // Registrar movimiento de multa para auditoría (asociado al autor)
-          const autorId = depData?.id_usuario || '';
-          tx.set(db.collection('movimientos').doc(), {
-            id_usuario: autorId,
-            tipo: 'multa',
-            referencia_id: depositId,
-            monto: multaMonto,
-            fecha: admin.firestore.FieldValue.serverTimestamp(),
-            descripcion: 'Multa por depósito tardío',
-            registrado_por: adminUid,
-          });
-        }
-      } else {
-        let multasSum = 0.0;
-        for (const part of detalle) {
-          const idUsuario = part?.id_usuario;
-          const monto = parseFloat(part?.monto || 0);
-          if (!idUsuario) continue;
-          const userSnap = userSnaps[idUsuario];
-          if (!userSnap || !userSnap.exists) continue;
-          const userData = userSnap.data();
-          const partTipo = part?.tipo || depData?.tipo || 'ahorro';
-          // Si el detalle es multa, NO sumar al total del usuario; acumular para caja
-          if (partTipo === 'multa') {
-            multasSum += monto;
-            continue;
-          }
-          function fieldForTipo(tipo) {
-            switch (tipo) {
-              case 'plazo_fijo': return 'total_plazos_fijos';
-              case 'certificado': return 'total_certificados';
-              case 'pago_prestamo': return 'total_prestamos';
-              case 'ahorro':
-              default: return 'total_ahorros';
-            }
-          }
-          const targetField = fieldForTipo(partTipo);
-          const current = (userData[targetField] || 0) + monto;
-          // 📈 Actualizar avance anual 2026 si corresponde (aportes de ahorro)
-          try {
-            const params2026 = loadParametros2026();
-            const anioCfg = parseInt(params2026?.anio || 2026, 10);
-            const fechaDep = depData?.fecha_deposito_detectada || depData?.fecha_deposito || new Date();
-            const jsFechaDep = toJsDate(fechaDep);
-            if (jsFechaDep.getFullYear() === anioCfg && (partTipo === 'ahorro' || partTipo === 'deposito')) {
-              const avanceActual = parseFloat(userData?.avance_anual_2026 || 0);
-              const nuevoAvance = avanceActual + parseFloat(monto || 0);
-              const objetivoAnual = objetivoAnualForUser(userData, params2026);
-              tx.update(db.collection('usuarios').doc(idUsuario), {
-                avance_anual_2026: nuevoAvance,
-                objetivo_anual_2026: userData?.objetivo_anual_2026 || objetivoAnual,
-              });
-            }
-          } catch (e) { /* noop */ }
-          tx.update(db.collection('usuarios').doc(idUsuario), { [targetField]: current });
-          tx.set(db.collection('movimientos').doc(), {
-            id_usuario: idUsuario,
-            tipo: partTipo || 'deposito',
-            referencia_id: depositId,
-            monto: monto,
-            fecha: admin.firestore.FieldValue.serverTimestamp(),
-            descripcion: depData?.descripcion || 'Depósito aprobado (repartido)',
-            registrado_por: adminUid,
-          });
-        }
-        // 💰 ACTUALIZAR CAJA: Sumar el total del depósito completo (monto original del voucher)
-        // La lógica es: depósito de $100 → se reparte entre usuarios → caja recibe $100 (ingreso)
-        const montoTotalDeposito = parseFloat(depData?.monto || 0);
-        if (montoTotalDeposito > 0) {
-          const cajaRefReparto = db.collection('caja').doc('estado');
-          const cajaSnapReparto = await tx.get(cajaRefReparto);
-          let saldoCajaReparto = 0.0;
-          if (cajaSnapReparto.exists) saldoCajaReparto = parseFloat(cajaSnapReparto.data().saldo || 0);
-          tx.update(cajaRefReparto, { saldo: saldoCajaReparto + montoTotalDeposito });
-        }
-
-        // Acumular multas (del detalle y/o multasPorUsuario) para enviar a la caja y registrar movimientos
-        if (multasPorUsuario) {
-          for (const uid of Object.keys(multasPorUsuario)) {
-            const multa = parseFloat(multasPorUsuario[uid] || 0);
-            if (multa <= 0) continue;
-            multasSum += multa;
-            tx.set(db.collection('movimientos').doc(), {
-              id_usuario: uid,
-              tipo: 'multa',
-              referencia_id: depositId,
-              monto: multa,
-              fecha: admin.firestore.FieldValue.serverTimestamp(),
-              descripcion: 'Multa aplicada por admin durante revisión',
-              registrado_por: adminUid,
-            });
-          }
-        }
-        if (multaMonto > 0) {
-          multasSum += multaMonto;
-          const autorId = depData?.id_usuario || '';
-          tx.set(db.collection('movimientos').doc(), {
-            id_usuario: autorId,
-            tipo: 'multa',
-            referencia_id: depositId,
-            monto: multaMonto,
-            fecha: admin.firestore.FieldValue.serverTimestamp(),
-            descripcion: 'Multa por depósito tardío',
-            registrado_por: adminUid,
-          });
-        }
-        if (multasSum > 0) {
-          const cajaRef = db.collection('caja').doc('estado');
-          const cajaSnap2 = await tx.get(cajaRef);
-          let currentCaja2 = 0.0;
-          if (cajaSnap2.exists) currentCaja2 = parseFloat(cajaSnap2.data().saldo || 0);
-          tx.update(cajaRef, { saldo: currentCaja2 + multasSum });
-        }
-      }
-
-      const updatePayload = {
-        validado: approve,
-        estado: approve ? 'aprobado' : 'rechazado',
-        id_admin: adminUid,
-        observaciones: observaciones || '',
-        fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
-        fecha_aprobacion: approve ? admin.firestore.FieldValue.serverTimestamp() : admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if (multaMonto > 0) updatePayload.multa_monto = multaMonto;
-      if (montoSobrante > 0) updatePayload.monto_sobrante = montoSobrante;
-      tx.update(depRef, updatePayload);
+    const depRef = db.collection('depositos').doc(depositId);
+    
+    await depRef.update({
+      validado: approve,
+      estado: approve ? 'aprobado' : 'rechazado',
+      id_admin: adminUid,
+      observaciones: observaciones || '',
+      fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
     });
-
-    // After transaction, notify users affected
-    try {
-      const db2 = admin.firestore();
-      const depSnapAfter = await db2.collection('depositos').doc(depositId).get();
-      const afterData = depSnapAfter.data();
-      if (afterData) {
-        const detalle = parseDetalle(afterData.detalle_por_usuario);
-        if (!detalle || detalle.length === 0) {
-          const idUsuario = afterData.id_usuario;
-          if (idUsuario) {
-            await db2.collection('notificaciones').add({
-              id_usuario: idUsuario,
-              titulo: 'Depósito revisado',
-              mensaje: `Tu depósito ha sido ${afterData.validado ? 'aprobado' : 'rechazado'}.`,
-              tipo: 'aprobacion',
-              estado: 'enviada',
-              fecha_envio: admin.firestore.FieldValue.serverTimestamp(),
-              registrado_por: adminUid,
-            });
-          }
-        } else {
-          for (const p of detalle) {
-            const idUsuario = p.id_usuario;
-            if (idUsuario) {
-              await db2.collection('notificaciones').add({
-                id_usuario: idUsuario,
-                titulo: 'Depósito revisado',
-                mensaje: `Tu depósito ha sido ${afterData.validado ? 'aprobado' : 'rechazado'}.`,
-                tipo: 'aprobacion',
-                estado: 'enviada',
-                fecha_envio: admin.firestore.FieldValue.serverTimestamp(),
-                registrado_por: adminUid,
-              });
-            }
-          }
-          const sobrante = afterData.monto_sobrante || 0;
-          if (sobrante > 0) {
-            const autor = afterData.id_usuario;
-            if (autor) {
-              await db2.collection('notificaciones').add({
-                id_usuario: autor,
-                titulo: 'Depósito procesado — sobrante registrado',
-                mensaje: `Se ha registrado un sobrante de S/${sobrante.toFixed(2)} para este depósito.`,
-                tipo: 'sobrante',
-                estado: 'enviada',
-                fecha_envio: admin.firestore.FieldValue.serverTimestamp(),
-                registrado_por: adminUid,
-              });
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[admin-api] Error sending notifications after approval:', e);
-    }
-
-    res.json({ ok: true });
+    
+    res.json({ ok: true, message: approve ? 'Deposito aprobado' : 'Deposito rechazado' });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message || e.toString() });
+    console.error('[admin-api] Error approving deposit:', e);
+    res.status(500).json({ error: e.message || 'Error al procesar deposito' });
   }
 });
 
