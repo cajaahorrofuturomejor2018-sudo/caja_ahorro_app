@@ -52,7 +52,11 @@ export default function DepositosTab({ user }) {
     try {
       setDownloadingReport(true);
       const base = import.meta.env.VITE_API_URL || 'http://localhost:8080';
-      const resp = await fetch(`${base}/api/reportes/usuarios`, {
+      // Fix: avoid /api/api/ duplication when VITE_API_URL is '/api'
+      const reportUrl = base.endsWith('/api') 
+        ? `${base}/reportes/usuarios` 
+        : `${base}/api/reportes/usuarios`;
+      const resp = await fetch(reportUrl, {
         headers: { Authorization: `Bearer ${user.token}` }
       });
       if (!resp.ok) throw new Error('Error generando reporte');
