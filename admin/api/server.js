@@ -571,6 +571,7 @@ app.post('/api/users', verifyToken, async (req, res) => {
       total_multas: 0.0,
       total_plazos_fijos: 0.0,
       total_certificados: 0.0,
+      ahorro_voluntario: 0.0,
     });
     res.json({ ok: true, id: uid });
   } catch (e) {
@@ -613,13 +614,43 @@ app.post('/api/users/:id/estado', verifyToken, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
 
-// Get caja saldo
+// Get caja saldo - calcula dinámicamente desde movimientos
 app.get('/api/caja', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   try {
     const db = admin.firestore();
-    const snap = await db.collection('caja').doc('estado').get();
-    res.json({ saldo: snap.exists ? (snap.data().saldo || 0) : 0 });
+    // Calcular saldo dinámico sumando todos los movimientos
+    const movimientosSnap = await db.collection('movimientos').get();
+    let saldoDinamico = 0.0;
+    movimientosSnap.docs.forEach(doc => {
+      const mov = doc.data();
+      const monto = parseFloat(mov.monto || 0);
+      const tipo = (mov.tipo || '').toLowerCase();
+      // Incrementar caja para depósitos/aportes, decrementar para préstamos desembolsados
+      if (tipo.includes('deposito') || tipo.includes('aporte') || tipo.includes('ahorro') || tipo === 'multa') {
+        saldoDinamico += monto;
+      } else if (tipo.includes('prestamo') && (tipo.includes('desembolso') || tipo.includes('disbursement'))) {
+        saldoDinamico -= monto;
+      }
+    });
+    // También incluir multas si están registradas como movimientos
+    const multasSnap = await db.collection('multas').get();
+    let totalMultas = 0.0;
+    multasSnap.docs.forEach(doc => {
+      const multa = doc.data();
+      if ((multa.estado || '').toLowerCase() === 'pendiente') {
+        totalMultas += parseFloat(multa.monto || 0);
+      }
+    });
+    // Retornar saldo dinámico y almacenado para referencia
+    const estadoSnap = await db.collection('caja').doc('estado').get();
+    const saldoAlmacenado = estadoSnap.exists ? parseFloat(estadoSnap.data().saldo || 0) : 0;
+    res.json({ 
+      saldo: saldoDinamico, 
+      saldo_almacenado: saldoAlmacenado,
+      total_multas_pendientes: totalMultas,
+      fecha_calculo: new Date().toISOString()
+    });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
 
@@ -752,6 +783,9 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
 
     function computePenalty(depData, config) {
       try {
+        // Solo aplicar multas desde 2026
+        const now = new Date();
+        if (now.getFullYear() < 2026) return 0.0;
         const enforceDate = (config?.enforce_voucher_date) ?? false;
         if (!enforceDate) return 0.0;
         const detected = depData?.fecha_deposito_detectada; // fecha efectiva del pago (voucher)
