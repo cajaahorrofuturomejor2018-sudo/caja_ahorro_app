@@ -792,8 +792,7 @@ app.get('/api/aggregate_totals', verifyToken, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message || e.toString() }); }
 });
 
-// Approve a deposit - this is a basic version; advanced distribution logic isn't implemented yet
-// Approve or reject a deposit - simplified endpoint
+// Approve or reject a deposit with transaction to update user totals
 app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
   if (!req.user.admin) return res.status(403).json({ error: 'Not admin' });
   const depositId = req.params.id;
@@ -801,14 +800,72 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
   const { approve = true, observaciones = '' } = req.body || {};
   try {
     const db = admin.firestore();
-    const depRef = db.collection('depositos').doc(depositId);
     
-    await depRef.update({
-      validado: approve,
-      estado: approve ? 'aprobado' : 'rechazado',
-      id_admin: adminUid,
-      observaciones: observaciones || '',
-      fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
+    await db.runTransaction(async (tx) => {
+      // Read deposit first
+      const depRef = db.collection('depositos').doc(depositId);
+      const depSnap = await tx.get(depRef);
+      if (!depSnap.exists) throw new Error('Depósito no encontrado');
+      
+      const depData = depSnap.data();
+      const idUsuario = depData.id_usuario;
+      const tipo = depData.tipo || 'ahorro';
+      const monto = parseFloat(depData.monto || 0);
+      
+      // Read user if approving (to update totals)
+      let userRef = null;
+      let userSnap = null;
+      if (approve && idUsuario) {
+        userRef = db.collection('usuarios').doc(idUsuario);
+        userSnap = await tx.get(userRef);
+      }
+      
+      // Update deposit status
+      tx.update(depRef, {
+        validado: approve,
+        estado: approve ? 'aprobado' : 'rechazado',
+        id_admin: adminUid,
+        observaciones: observaciones || '',
+        fecha_revision: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      
+      // If approving, update user totals and create movement
+      if (approve && userRef && userSnap && userSnap.exists) {
+        const userData = userSnap.data();
+        
+        // Determine target field based on deposit type
+        const field = (() => {
+          switch (tipo) {
+            case 'ahorro': return 'total_ahorros';
+            case 'plazo_fijo': return 'total_plazos_fijos';
+            case 'certificado': return 'total_certificados';
+            case 'pago_prestamo': return 'total_prestamos';
+            case 'ahorro_voluntario': return 'total_ahorro_voluntario';
+            default: return 'total_ahorros';
+          }
+        })();
+        
+        // Increment user total (accumulative sum)
+        const currentTotal = parseFloat(userData[field] || 0);
+        tx.update(userRef, { [field]: currentTotal + monto });
+        
+        // Create movement record
+        tx.set(db.collection('movimientos').doc(), {
+          id_usuario: idUsuario,
+          tipo: tipo || 'deposito',
+          referencia_id: depositId,
+          monto: monto,
+          fecha: admin.firestore.FieldValue.serverTimestamp(),
+          descripcion: depData.descripcion || 'Depósito aprobado',
+          registrado_por: adminUid,
+        });
+        
+        // Update caja balance
+        const cajaRef = db.collection('caja').doc('estado');
+        const cajaSnap = await tx.get(cajaRef);
+        const cajaSaldo = parseFloat(cajaSnap.exists ? (cajaSnap.data().saldo || 0) : 0);
+        tx.update(cajaRef, { saldo: cajaSaldo + monto });
+      }
     });
     
     res.json({ ok: true, message: approve ? 'Deposito aprobado' : 'Deposito rechazado' });
