@@ -14,6 +14,7 @@ class Usuario {
   final double totalMultas;
   final double totalPlazosFijos;
   final double totalCertificados;
+  final double totalAhorroVoluntario;
   final String? numeroCuenta;
 
   Usuario({
@@ -31,6 +32,7 @@ class Usuario {
     required this.totalMultas,
     this.totalPlazosFijos = 0.0,
     this.totalCertificados = 0.0,
+    this.totalAhorroVoluntario = 0.0,
   });
 
   factory Usuario.fromFirestore(DocumentSnapshot doc) {
@@ -72,6 +74,7 @@ class Usuario {
       totalMultas: (data['total_multas'] ?? 0).toDouble(),
       totalPlazosFijos: (data['total_plazos_fijos'] ?? 0).toDouble(),
       totalCertificados: (data['total_certificados'] ?? 0).toDouble(),
+      totalAhorroVoluntario: (data['total_ahorro_voluntario'] ?? 0).toDouble(),
       numeroCuenta:
           (data['numero_cuenta'] ?? data['nro_cuenta'] ?? data['cuenta'])
               as String?,

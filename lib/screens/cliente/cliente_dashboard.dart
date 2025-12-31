@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../screens/shared/pdf_preview_screen.dart';
 import '../../core/services/firestore_service.dart';
@@ -27,11 +28,18 @@ class _ClienteDashboardState extends State<ClienteDashboard> {
   final penaltyCheckService = PenaltyCheckService();
   Usuario? usuario;
   String? _errorMessage;
+  StreamSubscription<DocumentSnapshot>? _usuarioSub;
 
   @override
   void initState() {
     super.initState();
     _loadUser();
+  }
+
+  @override
+  void dispose() {
+    _usuarioSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadUser() async {
@@ -43,13 +51,29 @@ class _ClienteDashboardState extends State<ClienteDashboard> {
 
         if (!mounted) return;
 
-        // Ahora cargar datos actualizados del usuario
-        final data = await service.getUsuario(uid);
-        if (!mounted) return;
-        setState(() {
-          usuario = data;
-          _errorMessage = null;
-        });
+        // Suscribirnos en tiempo real al documento del usuario para reflejar cambios inmediatos
+        _usuarioSub?.cancel();
+        _usuarioSub = FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(uid)
+            .snapshots()
+            .listen(
+              (snap) {
+                if (!mounted) return;
+                if (snap.exists) {
+                  setState(() {
+                    usuario = Usuario.fromFirestore(snap);
+                    _errorMessage = null;
+                  });
+                }
+              },
+              onError: (e) {
+                if (!mounted) return;
+                setState(() {
+                  _errorMessage = 'Error de suscripción: ${e.toString()}';
+                });
+              },
+            );
       } catch (e) {
         if (!mounted) return;
         setState(() {
@@ -482,7 +506,7 @@ class _ClienteDashboardState extends State<ClienteDashboard> {
                                   'Ahorro Voluntario',
                                   Colors.cyan[50],
                                   sumAhorroVoluntario,
-                                  0.0,
+                                  usuario!.totalAhorroVoluntario,
                                 ),
                                 // Mostrar tarjeta de Multas solo si es después del día 10
                                 // y si el usuario tiene multas pendientes

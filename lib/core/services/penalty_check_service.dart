@@ -111,7 +111,8 @@ class PenaltyCheckService {
         for (final doc in voucherSnapshot.docs) {
           final data = doc.data();
           final estado = data['estado'] as String?;
-          final fechaDeposito = (data['fecha_deposito'] as Timestamp?)?.toDate();
+          final fechaDeposito = (data['fecha_deposito'] as Timestamp?)
+              ?.toDate();
           final archivoUrl = data['archivo_url'] as String?;
 
           // Si tiene voucher/comprobante subido y está aprobado o pendiente, exentar

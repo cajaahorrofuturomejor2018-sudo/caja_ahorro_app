@@ -51,7 +51,7 @@ export default function DepositosTab({ user }) {
   async function downloadReporteUsuarios() {
     try {
       setDownloadingReport(true);
-      const base = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+      const base = import.meta.env.VITE_API_URL || '/api';
       // Fix: avoid /api/api/ duplication when VITE_API_URL is '/api'
       const reportUrl = base.endsWith('/api') 
         ? `${base}/reportes/usuarios` 
@@ -102,7 +102,7 @@ export default function DepositosTab({ user }) {
       formData.append('file', approveForm.pdfFile);
       formData.append('folder', 'documentos_depositos');
       
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/upload`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/upload`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${user.token}`

@@ -757,12 +757,16 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
   try {
     const db = admin.firestore();
     const docRef = db.collection('depositos').doc();
-    const payload = { id_usuario: idUsuario, tipo: tipo, monto: monto, descripcion: descripcion || 'Aporte registrado por admin', archivo_url: archivoUrl || '', validado: true, id_admin: req.user.uid, fecha_deposito: admin.firestore.FieldValue.serverTimestamp(), fecha_registro: admin.firestore.FieldValue.serverTimestamp() };
+    const numMonto = parseFloat(monto);
+    const payload = { id_usuario: idUsuario, tipo: tipo, monto: numMonto, descripcion: descripcion || 'Aporte registrado por admin', archivo_url: archivoUrl || '', validado: true, id_admin: req.user.uid, fecha_deposito: admin.firestore.FieldValue.serverTimestamp(), fecha_registro: admin.firestore.FieldValue.serverTimestamp() };
     await docRef.set(payload);
     // update totals and movimientos within a transaction
     await db.runTransaction(async (tx) => {
       const userRef = db.collection('usuarios').doc(idUsuario);
+      const cajaRefAporte = db.collection('caja').doc('estado');
+      // READS FIRST
       const snap = await tx.get(userRef);
+      const cajaSnapAporte = await tx.get(cajaRefAporte);
       if (!snap.exists) return;
       const data = snap.data();
       const field = (() => {
@@ -774,15 +778,16 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
           default: return 'total_ahorros';
         }
       })();
-      const current = (data[field] || 0) + monto;
+      const current = parseFloat(data[field] || 0) + numMonto;
+      const cajaSaldoAporte = cajaSnapAporte.exists ? parseFloat(cajaSnapAporte.data().saldo || 0) : 0.0;
+      // WRITES AFTER ALL READS
       tx.update(userRef, { [field]: current });
-      tx.set(db.collection('movimientos').doc(), { id_usuario: idUsuario, tipo: tipo || 'deposito', referencia_id: docRef.id, monto: monto, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: descripcion || 'Aporte admin', registrado_por: req.user.uid });
-      // Actualizar caja con el aporte registrado por admin
-      const cajaRefAporte = db.collection('caja').doc('estado');
-      const cajaSnapAporte = await tx.get(cajaRefAporte);
-      let cajaSaldoAporte = 0.0;
-      if (cajaSnapAporte.exists) cajaSaldoAporte = parseFloat(cajaSnapAporte.data().saldo || 0);
-      tx.update(cajaRefAporte, { saldo: cajaSaldoAporte + parseFloat(monto) });
+      tx.set(db.collection('movimientos').doc(), { id_usuario: idUsuario, tipo: tipo || 'deposito', referencia_id: docRef.id, monto: numMonto, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: descripcion || 'Aporte admin', registrado_por: req.user.uid });
+      if (cajaSnapAporte.exists) {
+        tx.update(cajaRefAporte, { saldo: cajaSaldoAporte + numMonto });
+      } else {
+        tx.set(cajaRefAporte, { saldo: numMonto }, { merge: true });
+      }
       // 📈 Actualizar avance anual 2026 si el aporte corresponde a ahorro/deposito
       try {
         const params2026 = loadParametros2026();
@@ -791,7 +796,7 @@ app.post('/api/aportes', verifyToken, async (req, res) => {
         if (now.getFullYear() === anioCfg && (tipo === 'ahorro' || tipo === 'deposito' || !tipo)) {
           const udata = snap.data() || {};
           const avanceActual = parseFloat(udata?.avance_anual_2026 || 0);
-          const nuevoAvance = avanceActual + parseFloat(monto || 0);
+          const nuevoAvance = avanceActual + numMonto;
           const objetivoAnual = objetivoAnualForUser(udata, params2026);
           tx.update(userRef, {
             avance_anual_2026: nuevoAvance,
@@ -854,8 +859,13 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           console.log('[admin-api] WARNING: User NOT found:', idUsuario);
         }
       }
+      // Read caja BEFORE any writes
+      const cajaRef = db.collection('caja').doc('estado');
+      const cajaSnap = await tx.get(cajaRef);
+      const cajaSaldo = parseFloat(cajaSnap.exists ? (cajaSnap.data().saldo || 0) : 0);
+      console.log('[admin-api] Caja (pre-write): ', cajaSaldo);
       
-      // Update deposit status
+      // Update deposit status (WRITE)
       console.log('[admin-api] Updating deposit status to:', approve ? 'aprobado' : 'rechazado');
       tx.update(depRef, {
         validado: approve,
@@ -900,13 +910,14 @@ app.post('/api/deposits/:id/approve', verifyToken, async (req, res) => {
           registrado_por: adminUid,
         });
         
-        // Update caja balance
+        // Update caja balance (WRITE using pre-read value)
         console.log('[admin-api] Updating caja balance...');
-        const cajaRef = db.collection('caja').doc('estado');
-        const cajaSnap = await tx.get(cajaRef);
-        const cajaSaldo = parseFloat(cajaSnap.exists ? (cajaSnap.data().saldo || 0) : 0);
         console.log('[admin-api] Caja: ', cajaSaldo, '+', monto, '=', cajaSaldo + monto);
-        tx.update(cajaRef, { saldo: cajaSaldo + monto });
+        if (cajaSnap.exists) {
+          tx.update(cajaRef, { saldo: cajaSaldo + monto });
+        } else {
+          tx.set(cajaRef, { saldo: monto }, { merge: true });
+        }
       }
     });
     
@@ -1037,6 +1048,12 @@ app.post('/api/prestamos/:id/precancelar', verifyToken, async (req, res) => {
       const preSnap = await tx.get(preRef);
       if (!preSnap.exists) throw new Error('Préstamo no encontrado');
       const data = preSnap.data() || {};
+
+      // Leer caja ANTES de cualquier write para cumplir reglas de transacción
+      const cajaRefPre = db.collection('caja').doc('estado');
+      const cajaSnapPre = await tx.get(cajaRefPre);
+      const montoPre = parseFloat(data.saldo_pendiente || 0);
+      const cajaSaldoPre = cajaSnapPre.exists ? parseFloat(cajaSnapPre.data().saldo || 0) : 0.0;
       
       // Cambiar a PRESTAMO FINALIZADO
       tx.update(preRef, {
@@ -1054,17 +1071,12 @@ app.post('/api/prestamos/:id/precancelar', verifyToken, async (req, res) => {
         id_usuario: data.id_usuario || '',
         tipo: 'prestamo_precancelacion',
         referencia_id: id,
-        monto: parseFloat(data.saldo_pendiente || 0),
+        monto: montoPre,
         fecha: admin.firestore.FieldValue.serverTimestamp(),
         descripcion: 'Préstamo precancelado por pago en un solo pago',
         registrado_por: adminUid,
       });
-      // Actualizar caja: precancelación incrementa saldo por el pago
-      const cajaRefPre = db.collection('caja').doc('estado');
-      const cajaSnapPre = await tx.get(cajaRefPre);
-      let cajaSaldoPre = 0.0;
-      if (cajaSnapPre.exists) cajaSaldoPre = parseFloat(cajaSnapPre.data().saldo || 0);
-      const montoPre = parseFloat(data.saldo_pendiente || 0);
+      // Actualizar caja: precancelación incrementa saldo por el pago (write después de todos los reads)
       tx.update(cajaRefPre, { saldo: cajaSaldoPre + montoPre });
     });
     
@@ -1165,15 +1177,16 @@ app.post('/api/prestamos/:id/pagos', verifyToken, async (req, res) => {
       let mesesRestantes = 0; if (cuota > 0) mesesRestantes = Math.ceil(saldoPendiente / cuota);
       const updates = { historial_pagos: historial, saldo_pendiente: saldoPendiente, meses_restantes: mesesRestantes, fecha_ultimo_pago: admin.firestore.FieldValue.serverTimestamp() };
       if (saldoPendiente <= 0.001) { updates.estado = 'cancelado'; updates.fecha_cancelacion = admin.firestore.FieldValue.serverTimestamp(); }
-      tx.update(preRef, updates);
-      // crear movimiento
-      tx.set(db.collection('movimientos').doc(), { id_usuario: data.id_usuario || '', tipo: 'pago_prestamo', referencia_id: id, monto: pago.monto || pago['monto'] || 0, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: pago.descripcion || 'Pago préstamo', registrado_por: req.user.uid });
-      // Actualizar caja: pago de préstamo incrementa saldo
+
+      // Leer caja ANTES de cualquier write
       const cajaRefPago = db.collection('caja').doc('estado');
       const cajaSnapPago = await tx.get(cajaRefPago);
-      let cajaSaldoPago = 0.0;
-      if (cajaSnapPago.exists) cajaSaldoPago = parseFloat(cajaSnapPago.data().saldo || 0);
       const montoPago = parseFloat(pago.monto || pago['monto'] || 0);
+      const cajaSaldoPago = cajaSnapPago.exists ? parseFloat(cajaSnapPago.data().saldo || 0) : 0.0;
+      tx.update(preRef, updates);
+      // crear movimiento
+      tx.set(db.collection('movimientos').doc(), { id_usuario: data.id_usuario || '', tipo: 'pago_prestamo', referencia_id: id, monto: montoPago, fecha: admin.firestore.FieldValue.serverTimestamp(), descripcion: pago.descripcion || 'Pago préstamo', registrado_por: req.user.uid });
+      // Actualizar caja: pago de préstamo incrementa saldo (después de leer)
       tx.update(cajaRefPago, { saldo: cajaSaldoPago + montoPago });
     });
     res.json({ ok: true });

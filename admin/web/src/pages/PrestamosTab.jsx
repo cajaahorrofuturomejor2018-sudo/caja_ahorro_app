@@ -68,7 +68,7 @@ export default function PrestamosTab({ user }) {
       formData.append('file', approveForm.pdfFile);
       formData.append('folder', 'contratos_prestamos');
       
-      const base = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+      const base = import.meta.env.VITE_API_URL || '/api';
       // Si base es '/api', no duplicar el segmento 'api' en la ruta
       const uploadUrl = base.endsWith('/api') ? `${base}/upload` : `${base}/api/upload`;
       const response = await fetch(uploadUrl, {

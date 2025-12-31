@@ -22,6 +22,8 @@ class FirestoreService {
         return 'total_certificados';
       case 'pago_prestamo':
         return 'total_prestamos';
+      case 'ahorro_voluntario':
+        return 'total_ahorro_voluntario';
       case 'ahorro':
       default:
         return 'total_ahorros';

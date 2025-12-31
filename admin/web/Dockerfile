@@ -1,8 +1,9 @@
 FROM node:18-alpine AS build
 WORKDIR /app
 
-# Allow passing the API URL at build time
-ARG VITE_API_URL=http://api:8080
+# Configurar la URL base del API para el build del frontend
+# Usar '/api' para que el navegador llame relativo y Nginx haga el proxy.
+ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
 
 COPY package.json package-lock.json* ./

@@ -1,14 +1,9 @@
 import axios from 'axios';
 
 const getBaseURL = () => {
-  const envUrl = import.meta.env.VITE_API_URL;
-  if (envUrl) return envUrl;
-  
-  // Default fallback
-  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-    return 'http://localhost:8080';
-  }
-  return '';
+  // Usar siempre base relativa '/api' para que Nginx proxee al contenedor API.
+  // Evita hosts como 'http://api:8080' que no resuelven en el navegador.
+  return '/api';
 };
 
 const client = axios.create({
@@ -18,6 +13,19 @@ const client = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Aplicar token almacenado en localStorage al iniciar (evita 401 en la primera carga)
+try {
+  const saved = localStorage.getItem('adminUser');
+  if (saved) {
+    const u = JSON.parse(saved);
+    const t = u?.token;
+    if (t) {
+      client.defaults.headers.common['Authorization'] = `Bearer ${t}`;
+      console.log('[apiClient] Restored token from storage');
+    }
+  }
+} catch (_) {}
 
 /**
  * Set Bearer token for authenticated requests
@@ -106,8 +114,8 @@ export async function approveDeposit(depositId, approve = true, observaciones = 
   const payload = { approve, observaciones };
   if (interes !== null) payload.interes = interes;
   if (documento_url !== null) payload.documento_url = documento_url;
-  console.log('[approveDeposit]', `Calling /api/deposits/${depositId}/approve with:`, payload);
-  return apiPost(`/api/deposits/${depositId}/approve`, payload);
+  console.log('[approveDeposit]', `Calling /deposits/${depositId}/approve with:`, payload);
+  return apiPost(`/deposits/${depositId}/approve`, payload);
 }
 
 /**
