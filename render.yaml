@@ -1,0 +1,27 @@
+services:
+  - name: caja-admin-api
+    type: web
+    env: docker
+    plan: free
+    rootDir: admin/api
+    dockerfilePath: admin/api/Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_ACCOUNT_JSON
+        sync: false   # Crea un secret en Render con el JSON minificado de la service account
+      - key: DISABLE_AUTH
+        value: "true"  # Cambia a false si quieres tokens
+      - key: MOCK_API
+        value: "false"
+      - key: ADMIN_EMAILS
+        value: "cajaahorrofuturomejor2018@gmail.com"
+
+  - name: caja-admin-web
+    type: static
+    plan: free
+    rootDir: admin/web
+    buildCommand: "npm ci --include=dev --legacy-peer-deps --no-audit --no-fund && npm run build"
+    publishPath: "dist"
+    envVars:
+      - key: VITE_API_URL
+        value: "https://<TU-API>.onrender.com"  # Reemplaza con la URL pública del servicio caja-admin-api
