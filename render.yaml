@@ -22,7 +22,7 @@ services:
     plan: free
     rootDir: admin/web
     buildCommand: "npm ci --include=dev --legacy-peer-deps --no-audit --no-fund && npm run build"
-    publishPath: "dist"
+    staticPublishPath: "dist"
     envVars:
       - key: VITE_API_URL
         value: "https://<TU-API>.onrender.com"  # Reemplaza con la URL pública del servicio caja-admin-api
