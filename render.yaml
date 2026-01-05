@@ -24,4 +24,4 @@ services:
     staticPublishPath: "dist"
     envVars:
       - key: VITE_API_URL
-        value: "https://<TU-API>.onrender.com"  # Reemplaza con la URL pública del servicio caja-admin-api
+        value: "https://caja-admin-api.onrender.com"
