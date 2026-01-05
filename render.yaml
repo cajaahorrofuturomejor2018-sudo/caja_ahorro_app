@@ -17,7 +17,8 @@ services:
         value: "cajaahorrofuturomejor2018@gmail.com"
 
   - name: caja-admin-web
-    type: static_site
+    type: web
+    env: static
     plan: free
     rootDir: admin/web
     buildCommand: "npm ci --include=dev --legacy-peer-deps --no-audit --no-fund && npm run build"
