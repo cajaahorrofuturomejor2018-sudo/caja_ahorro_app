@@ -4,7 +4,7 @@ services:
     env: docker
     plan: free
     rootDir: admin/api
-    dockerfilePath: admin/api/Dockerfile
+    dockerfilePath: Dockerfile
     autoDeploy: true
     envVars:
       - key: SERVICE_ACCOUNT_JSON
