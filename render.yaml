@@ -19,7 +19,6 @@ services:
   - name: caja-admin-web
     type: web
     env: static
-    plan: free
     rootDir: admin/web
     buildCommand: "npm ci --include=dev --legacy-peer-deps --no-audit --no-fund && npm run build"
     staticPublishPath: "dist"
