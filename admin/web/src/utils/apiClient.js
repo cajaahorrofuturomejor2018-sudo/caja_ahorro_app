@@ -1,9 +1,14 @@
 import axios from 'axios';
 
 const getBaseURL = () => {
-  // Usar siempre base relativa '/api' para que Nginx proxee al contenedor API.
-  // Evita hosts como 'http://api:8080' que no resuelven en el navegador.
-  return '/api';
+  // Usar VITE_API_URL si está disponible (en Render), sino '/api' relativa (local)
+  const apiUrl = import.meta.env.VITE_API_URL || '/api';
+  // Si VITE_API_URL es una URL completa (https://...), no añadir /api al final
+  // Si es relativa (/api), usarla tal cual
+  if (apiUrl.startsWith('http')) {
+    return apiUrl; // Ya tiene la ruta completa
+  }
+  return apiUrl; // Ruta relativa como '/api'
 };
 
 const client = axios.create({
